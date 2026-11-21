@@ -17,3 +17,36 @@
   width: min(240px, 100%);
   height: 148px;
 }
+
+.reading-photos {
+  margin: 20px 0;
+}
+
+.reading-photos h3 {
+  margin: 0 0 10px;
+}
+
+.photo-grid, .photo-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.photo-grid img {
+  display: block;
+  width: 138px;
+  height: 104px;
+  object-fit: contain;
+  background: #f4f7fa;
+  border-radius: 6px;
+}
+
+.photo-grid button {
+  margin-top: 6px;
+}
+
+.photo-input {
+  display: grid;
+  gap: 4px;
+}
