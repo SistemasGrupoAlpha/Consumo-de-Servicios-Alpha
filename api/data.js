@@ -39,7 +39,16 @@ if (req.method === 'GET') {
   const lookups = await resolveLookups(site, mapping, items, getItems);
   const rows = readItems(kind, items, mapping, lookups);
   if (details?.webUrl) {
-    for (const row of rows) row.LogoUrl = buildingLogoUrl(row, details.webUrl);
+    const listUrl = new URL(details.webUrl);
+    for (const row of rows) {
+      row.LogoUrl = buildingLogoUrl(row, listUrl);
+      if (row.LogoUrl) {
+        const itemUrl = new URL(listUrl);
+        itemUrl.pathname = `${listUrl.pathname.replace(/\/$/, '')}/DispForm.aspx`;
+        itemUrl.search = new URLSearchParams({ ID: row.id }).toString();
+        row.LogoItemUrl = itemUrl.href;
+      }
+    }
   }
   const visible = kind === 'accesos' && user.rol !== 'Admin'
     ? rows.filter(item => String(item.Correo || '').trim().toLowerCase() === user.usuario)
