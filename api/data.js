@@ -3,18 +3,44 @@ const {columnsFor,mapColumns,resolveLookups,readItems}=require('../lib/consumo-c
 const keys={edificios:'SP_LIST_EDIFICIOS',locales:'SP_LIST_LOCALES',medidores:'SP_LIST_MEDIDORES',lecturas:'SP_LIST_LECTURAS',accesos:'SP_LIST_ACCESOS'};
 const enc=encodeURIComponent;
 async function all(url){let result=[];for(let i=0;url&&i<40;i++){const r=await g(url);result.push(...(r.value||[]));url=r['@odata.nextLink'];}if(url)throw fail(413,'Demasiados registros para una consulta');return result;}
-const itemsPath = (site, list) => `/sites/${enc(site)}/lists/${enc(list)}/items`;
+const listPath = (site, list) => `/sites/${enc(site)}/lists/${enc(list)}`;
+const itemsPath = (site, list) => `${listPath(site, list)}/items`;
 
 const getItems = (site, list, field) => all(`${itemsPath(site, list)}?$expand=fields($select=${enc(field)})&$top=200`);
+
+function buildingLogoUrl(row, listUrl) {
+  if (!row.Logo || !/^\d+$/.test(String(row.id))) return;
+  let image = row.Logo;
+  if (typeof image === 'string') {
+    try { image = JSON.parse(image); }
+    catch { return; }
+  }
+  const list = new URL(listUrl);
+  if (list.protocol !== 'https:') return;
+  if (typeof image?.serverRelativeUrl === 'string' && image.serverRelativeUrl.startsWith('/')) {
+    const url = new URL(image.serverRelativeUrl, list);
+    if (url.origin === list.origin) return url.href;
+  }
+  const file = image?.fileName;
+  if (typeof file !== 'string' || !/^[^/\\]+\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(file)) return;
+  list.pathname = `${list.pathname.replace(/\/$/, '')}/Attachments/${row.id}/${enc(file)}`;
+  list.search = '';
+  list.hash = '';
+  return list.href;
+}
 
 module.exports=route(['GET','POST','PATCH','DELETE'],async(req,res,user)=>{
 const kind=String(req.query?.kind||'');if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
-  const [items, columns] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list)]);
+  const listDetails = kind === 'edificios' ? g(`${listPath(site, list)}?$select=webUrl`) : null;
+  const [items, columns, details] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list), listDetails]);
   const mapping = mapColumns(kind, columns, items);
   const lookups = await resolveLookups(site, mapping, items, getItems);
   const rows = readItems(kind, items, mapping, lookups);
+  if (details?.webUrl) {
+    for (const row of rows) row.LogoUrl = buildingLogoUrl(row, details.webUrl);
+  }
   const visible = kind === 'accesos' && user.rol !== 'Admin'
     ? rows.filter(item => String(item.Correo || '').trim().toLowerCase() === user.usuario)
     : rows;
