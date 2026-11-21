@@ -1,38 +1,28 @@
 const {g}=require('../lib/graph');const {siteId,listId}=require('../lib/consumo-sharepoint');const {route,send,fail}=require('../lib/http');
+const {columnsFor,mapColumns,resolveLookups,readItems}=require('../lib/consumo-columnas');
 const keys={edificios:'SP_LIST_EDIFICIOS',locales:'SP_LIST_LOCALES',medidores:'SP_LIST_MEDIDORES',lecturas:'SP_LIST_LECTURAS',accesos:'SP_LIST_ACCESOS'};
 const enc=encodeURIComponent;
 async function all(url){let result=[];for(let i=0;url&&i<40;i++){const r=await g(url);result.push(...(r.value||[]));url=r['@odata.nextLink'];}if(url)throw fail(413,'Demasiados registros para una consulta');return result;}
 const itemsPath = (site, list) => `/sites/${enc(site)}/lists/${enc(list)}/items`;
 
-async function buildingsById(site) {
-  const list = await listId(site, keys.edificios);
-  const items = await all(`${itemsPath(site, list)}?$expand=fields($select=Title)&$top=200`);
-  return new Map(items.map(item => [String(item.id), item.fields?.Title]));
-}
-
-function readingFields(fields, buildings) {
-  return {
-    Edificio: buildings.get(String(fields.Edificio1LookupId)) ?? fields.Edificio ?? fields.Edificio1 ?? '',
-    FechaLectura: fields.FechaLectura ?? fields.FechaLectura1,
-  };
-}
+const getItems = (site, list, field) => all(`${itemsPath(site, list)}?$expand=fields($select=${enc(field)})&$top=200`);
 
 module.exports=route(['GET','POST','PATCH','DELETE'],async(req,res,user)=>{
 const kind=String(req.query?.kind||'');if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
-  const results = all(`${base}?$expand=fields&$top=200`);
-  if (kind === 'lecturas') {
-    const [items, buildings] = await Promise.all([results, buildingsById(site)]);
-    return send(res, 200, { items: items.map(({ id, fields = {} }) => ({
-      id, ...fields, ...readingFields(fields, buildings),
-    })) });
-  }
-  const items = await results;
+  const [items, columns] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list)]);
+  const mapping = mapColumns(kind, columns, items);
+  const lookups = await resolveLookups(site, mapping, items, getItems);
+  const rows = readItems(kind, items, mapping, lookups);
   const visible = kind === 'accesos' && user.rol !== 'Admin'
-    ? items.filter(item => String(item.fields?.Correo || item.fields?.Usuario || '').toLowerCase() === user.usuario)
-    : items;
-  return send(res, 200, { items: visible.map(({ id, fields }) => ({ id, ...fields })) });
+    ? rows.filter(item => String(item.Correo || '').trim().toLowerCase() === user.usuario)
+    : rows;
+  const fieldsByName = new Map([...mapping].map(([field, column]) => [column.name, field]));
+  const visibleKeys = new Set(visible.flatMap(Object.keys));
+  const detailColumns = columns.filter(column => !column.hidden && visibleKeys.has(fieldsByName.get(column.name) || column.name))
+    .map(column => ({ key: fieldsByName.get(column.name) || column.name, label: column.displayName }));
+  return send(res, 200, { items: visible, columns: detailColumns });
 }
 if(user.rol!=='Admin')throw fail(403,'Solo los administradores pueden modificar datos');
 const id=String(req.query?.id||'');const fields=req.body?.fields;
