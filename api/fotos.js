@@ -15,15 +15,7 @@ module.exports = route(['GET', 'POST'], async (req, res, user) => {
 
   const base = `/api/fotos?kind=${kind}&id=${id}`;
   if (req.method === 'POST') {
-    const { uploadId, photo } = req.body || {};
-    if (typeof uploadId !== 'string' || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(uploadId) || typeof photo !== 'string') {
-      throw fail(400, 'Fotografía inválida.');
-    }
-    if (photo.length > 4 * Math.ceil(Photos.maxUploadBytes / 3)) throw fail(413, 'La foto supera el límite de 3 MB.');
-    const bytes = Buffer.from(photo, 'base64');
-    if (bytes.length > Photos.maxUploadBytes || bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) {
-      throw fail(400, 'El archivo debe ser una fotografía JPEG válida.');
-    }
+    const { uploadId, bytes } = Photos.decodeReadingPhoto(req.body);
     const name = await Photos.saveReadingPhoto(id, uploadId, bytes);
     return send(res, 201, { url: `${base}&file=${encodeURIComponent(name)}` });
   }

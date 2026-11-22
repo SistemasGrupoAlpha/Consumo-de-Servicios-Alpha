@@ -50,3 +50,63 @@
   display: grid;
   gap: 4px;
 }
+
+.reading-registration > fieldset,
+.reading-service-options {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.reading-service-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+.reading-service-options legend {
+  margin-bottom: 8px;
+  font-weight: 650;
+}
+
+.reading-service {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 220px;
+  text-align: left;
+  color: #17385e;
+  background: #f4f7fa;
+  border: 1px solid #dfe5ed;
+  border-radius: 9px;
+  padding: 14px;
+}
+
+.reading-service[aria-pressed="true"] {
+  border-color: #087ad2;
+  background: #eaf4ff;
+}
+
+.reading-service:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.reading-service span {
+  display: grid;
+  gap: 3px;
+}
+
+.reading-service small {
+  color: #5c6d82;
+}
+
+.reading-registration-fields {
+  margin-top: 20px;
+}
+
+.reading-saved {
+  color: #137542;
+}

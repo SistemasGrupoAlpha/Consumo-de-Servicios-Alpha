@@ -64,17 +64,17 @@ export function ReadingPhotoGallery({ id, enabled, request }) {
   </section>;
 }
 
-export function ReadingPhotoPicker({ photos, enabled, disabled, onPick, onRemove }) {
+export function ReadingPhotoPicker({ photos, enabled, disabled, onPick, onRemove, single = false, required = false }) {
   const pick = event => {
     const files = Array.from(event.currentTarget.files);
     event.currentTarget.value = '';
     if (files.length) onPick(files);
   };
   return <section className="reading-photos">
-    <h3>Fotografías de la lectura</h3>
+    <h3>{required ? 'Foto del medidor (obligatoria)' : 'Fotografías de la lectura'}</h3>
     {enabled ? <div className="photo-controls">
       <label className="photo-input">Tomar foto<input type="file" accept="image/*" capture="environment" disabled={disabled} onChange={pick}/></label>
-      <label className="photo-input">Agregar fotos<input type="file" accept="image/*" multiple disabled={disabled} onChange={pick}/></label>
+      <label className="photo-input">{single ? 'Subir foto' : 'Agregar fotos'}<input type="file" accept="image/*" multiple={!single} disabled={disabled} onChange={pick}/></label>
     </div> : <p>La conexión a las fotos de SharePoint está pendiente.</p>}
     {photos.length > 0 && <div className="photo-grid">{photos.map(photo => <div key={photo.uploadId}>
       <img src={photo.preview} alt={photo.name || 'Foto por guardar'}/>
