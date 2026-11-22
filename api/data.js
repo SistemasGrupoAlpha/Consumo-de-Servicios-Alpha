@@ -254,6 +254,15 @@ if (buildingId && !/^\d+$/.test(buildingId)) throw fail(400, 'Edificio inválido
 if (kind === 'edificios' && req.method === 'GET' && req.query?.view === 'selector') {
   return send(res, 200, { items: await buildingChoices(await siteId(), user) });
 }
+if (kind === 'edificios' && req.method === 'GET' && req.query?.view === 'logos') {
+  const site = await siteId();
+  const [list, allowed] = await Promise.all([listId(site, keys.edificios), allowedBuildings(site, user)]);
+  if (allowed?.size === 0 || !Photos.configured()) return send(res, 200, { logos: {} });
+  const rows = await getItems(site, list, 'Logo');
+  const logos = Object.fromEntries(rows.filter(row => row.fields?.Logo && (!allowed || allowed.has(String(row.id))))
+    .map(row => [row.id, `/api/fotos?kind=edificios&id=${row.id}`]));
+  return send(res, 200, { logos });
+}
 if (kind === 'edificios' && req.method === 'GET' && req.query?.view === 'lecturas-del-mes') {
   return send(res, 200, await buildingReadingCounts(await siteId(), user));
 }

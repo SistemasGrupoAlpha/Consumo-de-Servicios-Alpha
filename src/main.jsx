@@ -3,6 +3,10 @@ import { ReadingPhotoGallery } from './reading-photos';
 import { ReadingRegistration } from './reading-registration';
 import { ReadingHistoryFilters, historyLocationId } from './reading-history';
 import { ReadingBuildingCards, sortByTitle } from './reading-cards';
+import './portal.css';
+import { AlphaLogo } from './brand';
+import { PortalLogin } from './portal-login';
+import { PortalHome } from './portal-home';
 import { BuildingAccess } from './building-access';
 import { ReadingReportDialog } from './reading-report-dialog';
 import { canReport, roleOptions, CONDO_ADMIN, SUPER_ADMIN } from '../lib/roles.mjs';
@@ -80,6 +84,7 @@ const demoRequest = async (url, opts = {}) => {
     if (kind === 'edificios' && method === 'GET' && query.get('view') === 'selector') {
       return { items: demoData.edificios.map(({ id, Title }) => ({ id, Title })) };
     }
+    if (kind === 'edificios' && method === 'GET' && query.get('view') === 'logos') return { logos: {} };
     if (kind === 'edificios' && method === 'GET' && query.get('view') === 'lecturas-del-mes') {
       const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Tegucigalpa' }).format(new Date()).slice(0, 7);
       const directory = registrationDirectory(demoData.locales, demoData.medidores);
@@ -190,6 +195,7 @@ const [catalogBuilding, setCatalogBuilding] = useState('');
 const [buildings, setBuildings] = useState(null);
 const [buildingsError, setBuildingsError] = useState('');
 const [readingCounts, setReadingCounts] = useState(null);
+const [buildingLogos, setBuildingLogos] = useState(null);
 const [countsError, setCountsError] = useState(false);
 const [countsAttempt, setCountsAttempt] = useState(0);
 const [startBuilding, setStartBuilding] = useState('');
@@ -257,6 +263,16 @@ useEffect(() => {
   });
   return () => controller.abort();
 }, [user, countsAttempt]);
+useEffect(() => {
+  if (!user || page !== 'inicio' || buildingLogos) return;
+  const controller = new AbortController();
+  request('/api/data?kind=edificios&view=logos', { signal: controller.signal }).then(result => {
+    if (!controller.signal.aborted) setBuildingLogos(result.logos || {});
+  }, () => {
+    if (!controller.signal.aborted) setBuildingLogos({});
+  });
+  return () => controller.abort();
+}, [user, page, buildingLogos]);
 useEffect(() => {
   if (!user) return;
   const controller = new AbortController();
@@ -389,21 +405,28 @@ async function exportFile(type) {
     setError(error.message || 'No se pudo exportar el archivo.');
   }
 }
-if(user===undefined)return <div className="loading">Cargando plataforma…</div>;
-if(!user)return <main className="login"><div className="login-card"><div className="brand-icon">A</div><h1>Consumo de Servicios</h1><p>Grupo Alpha · Administración de consumos</p><form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{const r=await request('/api/login',{method:'POST',body:JSON.stringify(login)});setUser(r.user)}catch(e){setError(e.message)}finally{setBusy(false)}}}><label>Usuario o correo<input required value={login.usuario} onChange={e=>setLogin({...login,usuario:e.target.value})}/></label><label>Contraseña<input required type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})}/></label>{error&&<p className="error">{error}</p>}<button disabled={busy} className="primary">Ingresar</button>{isPages&&<button type="button" className="secondary" onClick={()=>{sessionStorage.setItem('alpha_demo','1');setUser(demoUser);setError('')}}>Entrar en modo demostración</button>}{isPages&&<small>GitHub Pages: datos de ejemplo. No conecta con SharePoint ni guarda cambios reales.</small>}</form></div></main>;
+if (user === undefined) return <div className="loading">Cargando plataforma…</div>;
+if (!user) return <PortalLogin login={login} setLogin={setLogin} busy={busy} error={error}
+  onSubmit={async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request('/api/login', { method: 'POST', body: JSON.stringify(login) });
+      setUser(result.user);
+      setLogin({ usuario: '', password: '' });
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setBusy(false);
+    }
+  }}
+  onDemo={isPages ? () => { sessionStorage.setItem('alpha_demo', '1'); setUser(demoUser); setError(''); } : undefined}/>;
 const menu=[['inicio','Inicio',LayoutDashboard],['registro','Registro de lecturas',ClipboardPenLine],['lecturas','Historial de lecturas',History],['config','Configuraciones',Settings]];
-return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><div className="logo"><span className="brand-icon">A</span><div><b>GRUPO ALPHA</b><small>Consumo de Servicios</small></div></div><nav>{menu.filter(([k])=>(k!=='config'||admin)).map(([k,t,I])=><button key={k} className={page===k?'active':''} onClick={()=>go(k)}><I size={19}/>{t}</button>)}</nav><div className="sidebar-foot"><span>{user.nombre||user.usuario}<small>{roleOptions.find(([value])=>value===user.rol)?.[1]}</small></span><button title="Cerrar sesión" onClick={async()=>{await request('/api/logout',{method:'POST'});setUser(null);setRecords({});setBuildings(null);setBuildingsError('');setReadingCounts(null);setCountsError(false);setHistoryFilters({building:'',local:'',month:'',service:''});go('inicio')}}><LogOut size={18}/></button></div></aside><div className="workspace"><header className="topbar"><button className="iconbtn hamburger" aria-label="Menú de navegación" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}><Menu/></button><div className="breadcrumb">Grupo Alpha <span>/</span> {modules[page]?.title||({inicio:'Inicio',registro:'Registro de lecturas',config:'Configuraciones',usuarios:'Usuarios'}[page]||page)}</div><div className="avatar">{(user.nombre||user.usuario).slice(0,2).toUpperCase()}</div></header><main className="content">{error&&<div className="error banner">{error}<button onClick={()=>setError('')}>×</button></div>}
-{page==='inicio'&&<>
-  <div className="heading"><div><h1>Consumo de Servicios</h1><p>Lecturas realizadas por edificio en el mes actual.</p></div>
-    <button className="primary" onClick={()=>go('lecturas')}><History size={17}/> Ver historial</button>
-  </div>
-  <div className="panel">
-    {buildings?.length ? <ReadingBuildingCards buildings={buildings} onSelect={id=>go('registro',id)} readingCounts={readingCounts} countsError={countsError}/>
-      : <p role="status">{buildings ? 'No hay edificios habilitados para tu cuenta.' : buildingsError || 'Cargando edificios…'}</p>}
-    {buildingsError && <button className="secondary" onClick={reloadBuildings}>Reintentar edificios</button>}
-    {countsError && <button className="secondary reading-more" onClick={reloadCounts}>Reintentar conteo</button>}
-  </div>
-</>}
+return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><div className="logo workspace-logo"><AlphaLogo/><small>Consumo de Servicios</small></div><nav>{menu.filter(([k])=>(k!=='config'||admin)).map(([k,t,I])=><button key={k} className={page===k?'active':''} onClick={()=>go(k)}><I size={19}/>{t}</button>)}</nav><div className="sidebar-foot"><span>{user.nombre||user.usuario}<small>{roleOptions.find(([value])=>value===user.rol)?.[1]}</small></span><button title="Cerrar sesión" onClick={async()=>{await request('/api/logout',{method:'POST'});setUser(null);setRecords({});setBuildings(null);setBuildingsError('');setReadingCounts(null);setBuildingLogos(null);setCountsError(false);setHistoryFilters({building:'',local:'',month:'',service:''});go('inicio')}}><LogOut size={18}/></button></div></aside><div className="workspace"><header className="topbar"><button className="iconbtn hamburger" aria-label="Menú de navegación" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}><Menu/></button><div className="breadcrumb">Grupo Alpha <span>/</span> {modules[page]?.title||({inicio:'Inicio',registro:'Registro de lecturas',config:'Configuraciones',usuarios:'Usuarios'}[page]||page)}</div><div className="avatar">{(user.nombre||user.usuario).slice(0,2).toUpperCase()}</div></header><main className="content">{error&&<div className="error banner">{error}<button onClick={()=>setError('')}>×</button></div>}
+{page==='inicio'&&<PortalHome name={user.nombre || user.usuario} buildings={buildings} buildingsError={buildingsError}
+  reloadBuildings={reloadBuildings} counts={readingCounts} countsError={countsError} reloadCounts={reloadCounts} logos={buildingLogos || {}}
+  onSelect={id=>go('registro',id)} onHistory={()=>go('lecturas')}/>}
 {page==='registro'&&<ReadingRegistration key={startBuilding} initialBuilding={startBuilding} role={user.rol} request={request}
   buildings={buildings} buildingsError={buildingsError} reloadBuildings={reloadBuildings} readingCounts={readingCounts} countsError={countsError}
   onReadingChange={reloadCounts} onHistory={()=>go('lecturas')}/>}
