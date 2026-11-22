@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Building2, Droplets, Gauge, Save, Zap } from 'lucide-react';
-import { localBuildingId, localHasService, meterHasService, meterLocalId, readingServices } from '../lib/registro-lecturas.mjs';
+import { localBuildingId, localHasService, meterHasService, meterLocalId, metersWithHistory, readingServices } from '../lib/registro-lecturas.mjs';
 import { preparePhoto, ReadingPhotoPicker } from './reading-photos';
 
 const sortByTitle = (first, second) => String(first.Title).localeCompare(String(second.Title), 'es', { numeric: true });
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Tegucigalpa' }).format(new Date());
-const emptyReading = () => ({ FechaLectura: today(), LecturaInicial: '', LecturaFinal: '' });
 const serviceIcons = { agua: Droplets, energia: Zap };
 const localPageSize = 24;
 
@@ -18,12 +17,14 @@ export function ReadingRegistration({ request, onHistory }) {
   const [localId, setLocalId] = useState('');
   const [localSearch, setLocalSearch] = useState('');
   const [localLimit, setLocalLimit] = useState(localPageSize);
-  const [meterId, setMeterId] = useState('');
-  const [reading, setReading] = useState(emptyReading);
+  const [groupId, setGroupId] = useState('');
+  const [month, setMonth] = useState(() => today().slice(0, 7));
+  const [readingId, setReadingId] = useState('');
+  const [draft, setDraft] = useState({});
   const [photo, setPhoto] = useState(null);
   const [working, setWorking] = useState('');
   const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState('');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -41,18 +42,32 @@ export function ReadingRegistration({ request, onHistory }) {
   const selectedLocal = serviceLocals.find(local => String(local.id) === localId);
   const filteredLocals = serviceLocals.filter(local => String(local.Title).toLocaleLowerCase('es').includes(localSearch.trim().toLocaleLowerCase('es')));
   const meters = (catalogs?.meters || []).filter(meter => localId && meterLocalId(meter) === localId && meterHasService(meter, service)).sort(sortByTitle);
-  const selectedMeter = meters.find(meter => String(meter.id) === meterId) ?? (meters.length === 1 ? meters[0] : null);
+  const groups = metersWithHistory(meters, catalogs?.readings || []);
+  const monthReady = /^\d{4}-(?:0[1-9]|1[0-2])$/.test(month);
+  const selectedGroup = groups.find(group => group.key === groupId) ?? (groups.length === 1 ? groups[0] : null);
+  const selectedMeter = selectedGroup?.meter;
+  const monthly = selectedGroup?.readings.filter(row => row.month === month) || [];
+  const existing = monthly.find(row => row.id === readingId) ?? monthly[0];
+  const historicalIds = new Set(selectedGroup?.readings.map(row => row.meterId));
+  const conflict = !existing && (catalogs?.conflicts || []).some(row => row.month === month && historicalIds.has(row.meterId));
+  const defaults = {
+    FechaLectura: existing ? existing.date : month === today().slice(0, 7) ? today() : month && `${month}-01`,
+    LecturaInicial: String(existing?.initial ?? ''),
+    LecturaFinal: String(existing?.final ?? ''),
+  };
+  const reading = { ...defaults, ...draft };
 
   function changeContext() {
     setError('');
-    setSaved(false);
+    setSaved('');
     setPhoto(null);
-    setReading(current => ({ ...emptyReading(), FechaLectura: current.FechaLectura }));
+    setDraft({});
+    setReadingId('');
   }
 
   function selectLocal(id) {
     setLocalId(id);
-    setMeterId('');
+    setGroupId('');
     setLocalSearch('');
     setLocalLimit(localPageSize);
     changeContext();
@@ -67,7 +82,7 @@ export function ReadingRegistration({ request, onHistory }) {
   async function pickPhoto([file]) {
     setWorking('Preparando foto…');
     setError('');
-    setSaved(false);
+    setSaved('');
     try { setPhoto(await preparePhoto(file)); }
     catch (reason) { setError(reason.message); }
     finally { setWorking(''); }
@@ -77,16 +92,40 @@ export function ReadingRegistration({ request, onHistory }) {
     event.preventDefault();
     setError('');
     if (!selectedMeter) { setError('Seleccioná un medidor para registrar la lectura.'); return; }
-    if (!photo) { setError('Adjuntá una foto del medidor para guardar la lectura.'); return; }
+    if (conflict) return;
+    if (!existing && !photo) { setError('Adjuntá una foto del medidor para guardar la lectura.'); return; }
+    if (!existing && reading.FechaLectura.slice(0, 7) !== month) { setError('La fecha debe corresponder al mes seleccionado.'); return; }
     setWorking('Guardando lectura…');
     try {
-      await request('/api/data?kind=lecturas', { method: 'POST', body: JSON.stringify({
-        fields: { EdificioId: buildingId, Servicio: service, LocalId: localId, MedidorId: String(selectedMeter.id), ...reading },
-        uploadId: photo.uploadId, photo: photo.preview.split(',')[1],
-      }) });
-      changeContext();
-      setSaved(true);
-    } catch (reason) { setError(reason.message); }
+      if (existing) {
+        const values = Object.fromEntries(['LecturaInicial', 'LecturaFinal'].filter(key => reading[key] !== defaults[key]).map(key => [key, reading[key]]));
+        const result = await request(`/api/data?kind=registro&id=${encodeURIComponent(existing.id)}`, { method: 'PATCH', body: JSON.stringify({
+          EdificioId: buildingId, MedidorId: existing.meterId, Periodo: month, fields: values,
+        }) });
+        setCatalogs(current => ({...current, readings: current.readings.map(row => row.id === existing.id ? {
+          ...row, initial: result.fields.LecturaInicial ?? row.initial, final: result.fields.LecturaFinal ?? row.final,
+        } : row) }));
+        setDraft({});
+        setSaved(Object.keys(result.fields).length ? 'Valores actualizados.' : 'La lectura no tiene cambios.');
+      } else {
+        const meterId = String(selectedMeter.id);
+        const result = await request('/api/data?kind=lecturas', { method: 'POST', body: JSON.stringify({
+          fields: { EdificioId: buildingId, Servicio: service, LocalId: localId, MedidorId: meterId, ...reading },
+          uploadId: photo.uploadId, photo: photo.preview.split(',')[1],
+        }) });
+        setCatalogs(current => ({...current, readings: [...current.readings, { id: String(result.id), meterId, month,
+          date: reading.FechaLectura, initial: reading.LecturaInicial, final: reading.LecturaFinal }]}));
+        changeContext();
+        setSaved('Lectura y foto guardadas.');
+      }
+    } catch (reason) {
+      setError(reason.message);
+      if (reason.status === 409) {
+        setDraft({});
+        setPhoto(null);
+        setAttempt(current => current + 1);
+      }
+    }
     finally { setWorking(''); }
   }
 
@@ -128,24 +167,34 @@ export function ReadingRegistration({ request, onHistory }) {
             {filteredLocals.length > localLimit && <button type="button" className="secondary reading-more" onClick={() => setLocalLimit(current => current + localPageSize)}>Mostrar más locales</button>}
           </>}
         </fieldset>}
-        {localId && meters.length > 0 && <fieldset className="reading-step"><legend>Medidor</legend>
-          <div className="reading-choices reading-buildings">{meters.map(meter => <button type="button" className="reading-choice" key={meter.id} aria-pressed={selectedMeter?.id === meter.id} onClick={() => {
-            if (selectedMeter?.id !== meter.id) { setMeterId(String(meter.id)); changeContext(); }
+        {localId && groups.length > 0 && <fieldset className="reading-step"><legend>Medidor</legend>
+          <div className="reading-choices reading-buildings">{groups.map(({key,meter}) => <button type="button" className="reading-choice" key={key} aria-pressed={selectedGroup?.key === key} onClick={() => {
+            if (selectedGroup?.key !== key) { setGroupId(key); changeContext(); }
           }}><Gauge size={19}/><strong>{meter.Title}</strong>{meter.NumeroSerie && <small>{meter.NumeroSerie}</small>}</button>)}</div>
         </fieldset>}
-        {localId && !meters.length && <p role="status">El local está marcado para este servicio, pero no tiene un medidor vinculado en el catálogo.</p>}
+        {localId && !groups.length && <p role="status">Este local no tiene un medidor con historial en el servicio seleccionado.</p>}
         {selectedMeter && <>
+          <div className="form-grid reading-registration-fields"><label>Mes de lectura<input type="month" required placeholder="AAAA-MM" pattern="[0-9]{4}-(0[1-9]|1[0-2])" value={month} onChange={event => { setMonth(event.target.value); changeContext(); }}/></label></div>
+          {monthly.length > 1 && <fieldset className="reading-step"><legend>Lecturas de este mes</legend><div className="reading-choices reading-buildings">
+            {monthly.map(row => <button type="button" className="reading-choice" key={row.id} aria-pressed={existing?.id === row.id} onClick={() => {
+              changeContext(); setReadingId(row.id);
+            }}><span><strong>{row.date || row.month}</strong>{row.final != null && <span className="reading-choice-value">Lectura final {row.final}</span>}</span><small>#{row.id}</small></button>)}
+          </div></fieldset>}
+          {conflict && <p className="error" role="status">Hay una lectura de este mes con otro edificio asociado. Revisá el historial antes de registrar otra.</p>}
+          {monthReady && !conflict && <>
+          {existing && <p className="reading-month-status" role="status">Lectura del mes guardada. Podés corregir sus valores.</p>}
           <div className="form-grid reading-registration-fields">
-            <label>Fecha de lectura<input type="date" required value={reading.FechaLectura} onChange={event => setReading({ ...reading, FechaLectura: event.target.value })}/></label>
+            <label>Fecha de lectura<input type="date" required={!existing} readOnly={Boolean(existing)} value={reading.FechaLectura} onChange={event => setDraft({ ...draft, FechaLectura: event.target.value })}/></label>
             {['LecturaInicial', 'LecturaFinal'].map((key, index) => <label key={key}>{index ? 'Lectura final' : 'Lectura inicial'}{selectedMeter.UnidadMedida && ` (${selectedMeter.UnidadMedida})`}
-              <input required inputMode="decimal" pattern="-?[0-9]+([.,][0-9]+)?" value={reading[key]} onChange={event => setReading({ ...reading, [key]: event.target.value })}/>
+              <input required={!existing} inputMode="decimal" pattern="-?[0-9]+([.,][0-9]+)?" value={reading[key]} onChange={event => { setDraft({ ...draft, [key]: event.target.value }); setSaved(''); }}/>
             </label>)}
           </div>
-          <ReadingPhotoPicker photos={photo ? [photo] : []} enabled single required disabled={Boolean(working)} onPick={pickPhoto} onRemove={() => setPhoto(null)}/>
+          {!existing && <ReadingPhotoPicker photos={photo ? [photo] : []} enabled single required disabled={Boolean(working)} onPick={pickPhoto} onRemove={() => setPhoto(null)}/>}
+          </>}
         </>}
         {error && <p className="error" role="alert">{error}</p>}
-        {saved && <p className="reading-saved" role="status">Lectura y foto guardadas.</p>}
-        {selectedMeter && <button type="submit" className="primary"><Save size={16}/>{working || 'Guardar lectura'}</button>}
+        {saved && <p className="reading-saved" role="status">{saved}</p>}
+        {selectedMeter && monthReady && !conflict && <button type="submit" className="primary reading-submit"><Save size={16}/>{working || (existing ? 'Guardar cambios' : 'Guardar lectura')}</button>}
       </fieldset>
     </form>}
   </>;

@@ -1,6 +1,7 @@
 import React,{useEffect,useMemo,useState} from 'react';import{createRoot}from'react-dom/client';import{Building2,Store,Gauge,Users,ShieldCheck,History,LayoutDashboard,Settings,FileDown,Plus,ArrowLeft,LogOut,Search,Save,Menu,Trash2,Pencil,Eye,Activity,RefreshCw,ClipboardPenLine}from'lucide-react';import * as XLSX from 'xlsx';import{jsPDF}from'jspdf';import autoTable from'jspdf-autotable';import './style.css';
-import { preparePhoto, ReadingPhotoGallery, ReadingPhotoPicker, uploadReadingPhoto } from './reading-photos';
+import { ReadingPhotoGallery } from './reading-photos';
 import { ReadingRegistration } from './reading-registration';
+import { readingMeterId, readingMonth } from '../lib/registro-lecturas.mjs';
 const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
 function displayValue(field, value) {
   if (value == null || value === '') return '—';
@@ -19,6 +20,7 @@ function BuildingLogo({ row, fullSize = false }) {
     {unavailable ? 'Abrir en SharePoint' : <img className={fullSize ? 'building-logo-detail' : undefined} src={row.LogoUrl} alt={name} loading={fullSize ? 'eager' : 'lazy'} onError={()=>setUnavailable(true)}/>}
   </a>;
 }
+const editableReadingFields = ['LecturaInicial', 'LecturaFinal'];
 const readingTableFields = ['Title', 'Edificio', 'Medidor', 'FechaLectura', 'Periodo', 'TipoMedidor', 'LecturaInicial'];
 const names={Title:'Nombre / Código',Abreviatura:'Abreviatura',CuotaAgua:'Cuota de agua',CuotaEnergia:'Cuota de energía',Edificio:'Edificio',Cliente:'Cliente',MedidorEnergia:'Medidor de energía',MedidorAgua:'Medidor de agua',Metros2:'Metros²',DotacionAgua:'Dotación de agua',Observacion:'Observación',TipoMedidor:'Tipo de medidor',UnidadMedida:'Unidad de medida',NumeroSerie:'Número de serie',FechaLectura:'Fecha de lectura',LecturaInicial:'Lectura inicial',LecturaFinal:'Lectura final',CuotaAplicada:'Cuota aplicada',TotalPagar:'Total a pagar',Anio:'Año',Correo:'Correo',Activo:'Activo'};
 const isPages = import.meta.env.VITE_DEMO_MODE === 'true' || window.location.hostname.endsWith('.github.io');
@@ -27,7 +29,7 @@ const demoData = {
   edificios: [{id:'1',Title:'Edificio de ejemplo',Abreviatura:'DEMO',CuotaAgua:45,CuotaEnergia:5,Activo:'Sí'}, {id:'2',Title:'Edificio de ejemplo 2'}],
   locales: [{id:'1',Title:'Local 101',Edificio:'Edificio de ejemplo',EdificioLookupLookupId:'1',Cliente:'Cliente de prueba',MedidorAgua:'Sí',MedidorEnergia:'No'}, {id:'2',Title:'Local 201',Edificio:'Edificio de ejemplo 2',EdificioLookupLookupId:'2',MedidorAgua:'No',MedidorEnergia:'Sí'}],
   medidores: [{id:'1',Title:'AG-101',Edificio:'Edificio de ejemplo',Local:'Local 101',LocalLookupLookupId:'1',TipoMedidor:'Agua',UnidadMedida:'m³'}, {id:'2',Title:'EN-201',Edificio:'Edificio de ejemplo 2',Local:'Local 201',LocalLookupLookupId:'2',TipoMedidor:'Energía',UnidadMedida:'kWh'}],
-  lecturas: [{id:'1',Title:'AG-101 - Octubre',Edificio:'Edificio de ejemplo',Medidor:'AG-101',FechaLectura:'2026-10-31',TipoMedidor:'Agua',LecturaInicial:100,LecturaFinal:107,Consumo:7,CuotaAplicada:45,TotalPagar:315,Mes:'Octubre',Anio:'2026'}],
+  lecturas: [{id:'1',Title:'AG-101 - Octubre',Edificio:'Edificio de ejemplo',Medidor:'AG-101',MedidorLookupLookupId:'1',FechaLectura:'2026-10-31',TipoMedidor:'Agua',LecturaInicial:100,LecturaFinal:107,Consumo:7,CuotaAplicada:45,TotalPagar:315,Mes:'Octubre',Anio:'2026'}, {id:'2',Title:'EN-201 - Noviembre',Edificio:'Edificio de ejemplo 2',Medidor:'EN-201',MedidorLookupLookupId:'2',FechaLectura:'2026-11-10',TipoMedidor:'Energía',LecturaInicial:80,LecturaFinal:95}],
   accesos: [],
 };
 const demoPhotos = new Map();
@@ -47,7 +49,17 @@ const demoRequest = async (url, opts = {}) => {
   }
   if (url.startsWith('/api/data?')) {
     const kind = query.get('kind');
-    if (kind === 'registro' && method === 'GET') return { buildings: demoData.edificios, locals: demoData.locales, meters: demoData.medidores };
+    if (kind === 'registro' && method === 'GET') return {
+      buildings: demoData.edificios, locals: demoData.locales, meters: demoData.medidores,
+      readings: demoData.lecturas.map(row => ({ id: row.id, meterId: readingMeterId(row), month: readingMonth(row), date: row.FechaLectura, initial: row.LecturaInicial, final: row.LecturaFinal })), conflicts: [],
+    };
+    if (kind === 'registro' && method === 'PATCH') {
+      const { fields } = JSON.parse(opts.body);
+      const row = demoData.lecturas.find(reading => reading.id === id);
+      if (!row) throw Error('No se encontró la lectura.');
+      Object.assign(row, fields);
+      return { id, fields };
+    }
     const items = demoData[kind];
     if (!items) throw Error('Módulo desconocido');
     if (method === 'GET') return { items, photosEnabled: kind === 'lecturas' };
@@ -57,8 +69,11 @@ const demoRequest = async (url, opts = {}) => {
       if (kind === 'lecturas') {
         if (!photo) throw Error('Adjuntá una foto del medidor para guardar la lectura.');
         const meter = demoData.medidores.find(row => row.id === fields.MedidorId);
+        if (items.some(row => readingMeterId(row) === fields.MedidorId && readingMonth(row) === fields.FechaLectura.slice(0, 7))) {
+          throw Object.assign(Error('Ya existe una lectura para el mes.'), { status: 409 });
+        }
         items.push({ id, Title: `${meter.Title} - ${fields.FechaLectura}`, Edificio: meter.Edificio, Medidor: meter.Title,
-          Local: meter.Local, TipoMedidor: meter.TipoMedidor, FechaLectura: fields.FechaLectura,
+          Local: meter.Local, MedidorLookupLookupId: meter.id, TipoMedidor: meter.TipoMedidor, FechaLectura: fields.FechaLectura,
           LecturaInicial: fields.LecturaInicial, LecturaFinal: fields.LecturaFinal });
         demoPhotos.set(id, [{ url: `data:image/jpeg;base64,${photo}` }]);
       } else items.push({ id, ...fields });
@@ -77,13 +92,11 @@ const demoRequest = async (url, opts = {}) => {
   }
   throw Error('Función no disponible en demostración');
 };
-const request=async(url,opts={})=>{if(isPages)return demoRequest(url,opts);const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json','X-Requested-With':'eco'},...opts});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||`Error ${r.status}`);return data};
-function App(){const[user,setUser]=useState(undefined),[login,setLogin]=useState({usuario:'',password:''}),[page,setPage]=useState('inicio'),[records,setRecords]=useState({}),[listColumns,setListColumns]=useState({}),[users,setUsers]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[search,setSearch]=useState(''),[edit,setEdit]=useState(null),[pendingPhotos,setPendingPhotos]=useState([]),[photosEnabled,setPhotosEnabled]=useState(false),[filters,setFilters]=useState({edificio:'',tipo:'',mes:'',anio:''}),[selected,setSelected]=useState(null),[mobile,setMobile]=useState(false);
+const request=async(url,opts={})=>{if(isPages)return demoRequest(url,opts);const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json','X-Requested-With':'eco'},...opts});const data=await r.json().catch(()=>({}));if(!r.ok)throw Object.assign(Error(data.error||`Error ${r.status}`), {status:r.status});return data};
+function App(){const[user,setUser]=useState(undefined),[login,setLogin]=useState({usuario:'',password:''}),[page,setPage]=useState('inicio'),[records,setRecords]=useState({}),[listColumns,setListColumns]=useState({}),[users,setUsers]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[search,setSearch]=useState(''),[edit,setEdit]=useState(null),[photosEnabled,setPhotosEnabled]=useState(false),[filters,setFilters]=useState({edificio:'',tipo:'',mes:'',anio:''}),[selected,setSelected]=useState(null),[mobile,setMobile]=useState(false);
 const admin=user?.rol==='Admin';const fetchKind=async k=>{setBusy(true);setError('');try{const r=await request('/api/data?kind='+k);setRecords(s=>({...s,[k]:r.items||[]}));setListColumns(s=>({...s,[k]:r.columns||[]}));if(k==='lecturas')setPhotosEnabled(Boolean(r.photosEnabled))}catch(e){setError(e.message)}finally{setBusy(false)}};
 useEffect(()=>{request('/api/me').then(r=>setUser(r.user||null)).catch(()=>setUser(null))},[]);
 useEffect(()=>{if(user&&modules[page])fetchKind(page);if(user&&page==='usuarios')request('/api/users').then(r=>setUsers(r.users||[])).catch(e=>setError(e.message))},[page,user]);
-const editingReading = page === 'lecturas' && Boolean(edit);
-useEffect(() => { if (editingReading && !records.medidores) fetchKind('medidores'); }, [editingReading]);
 const go=p=>{setPage(p);setEdit(null);setSelected(null);setSearch('');setError('');setMobile(false)};
 const rows=records[page]||[];
 const tableFields = page === 'lecturas' ? readingTableFields : page === 'usuarios' ? ['nombre', 'usuario', 'rol', 'activo'] : modules[page]?.fields.slice(0, 6);
@@ -95,22 +108,9 @@ const buildingNames = page === 'lecturas' ? [...new Set(rows.map(row => row.Edif
 const visible=rows.filter(x=>Object.values(x).some(v=>String(v??'').toLowerCase().includes(search.toLowerCase()))).filter(x=>page!=='lecturas'||(!filters.edificio||String(x.Edificio||'')===filters.edificio)&&(!filters.tipo||String(x.TipoMedidor||'')===filters.tipo)&&(!filters.mes||String(x.Mes||'')===filters.mes)&&(!filters.anio||String(x.Anio||x.Año||'')===filters.anio));
 function openEditor(row) {
   setError('');
-  setPendingPhotos([]);
-  setEdit(row && page === 'lecturas' ? { ...row, MedidorId: row.MedidorLookupLookupId || row.MedidorLookupId || '' } : row);
+  setEdit(row);
 }
 function closeEditor() { if (!busy) openEditor(null); }
-async function pickPhotos(files) {
-  setBusy(true);
-  setError('');
-  try {
-    const photos = await Promise.all(files.map(preparePhoto));
-    setPendingPhotos(current => [...current, ...photos]);
-  } catch (error) {
-    setError(error.message);
-  } finally {
-    setBusy(false);
-  }
-}
 async function save() {
   setBusy(true);
   setError('');
@@ -120,39 +120,17 @@ async function save() {
       const result = await request('/api/users');
       setUsers(result.users || []);
     } else {
-      const entries = Object.entries(edit).filter(([key, value]) => !['id', 'LogoUrl', 'LogoItemUrl'].includes(key) && value !== undefined);
-      let fields = Object.fromEntries(entries);
-      if (page === 'lecturas' && !isPages) {
-        const original = rows.find(row => row.id === edit.id);
-        const existingMeter = original?.MedidorLookupLookupId ?? original?.MedidorLookupId;
-        fields = Object.fromEntries(entries.filter(([key, value]) => {
-          if (key === 'MedidorId') return value && value !== existingMeter;
-          if (key === 'Medidor' || !modules.lecturas.fields.includes(key)) return false;
-          return original ? value !== original[key] : value !== '';
-        }));
-        if (!edit.id && !edit.MedidorId) throw Error('Seleccioná un medidor para guardar la lectura.');
-        if (pendingPhotos.length && !photosEnabled) throw Error('La conexión a las fotos de SharePoint está pendiente.');
-      }
-      const result = await request(`/api/data?kind=${page}${edit.id ? '&id=' + edit.id : ''}`, {
+      const original = rows.find(row => row.id === edit.id);
+      const fields = Object.fromEntries(Object.entries(edit).filter(([key, value]) =>
+        !['id', 'LogoUrl', 'LogoItemUrl'].includes(key) && value !== undefined &&
+        (page !== 'lecturas' || (editableReadingFields.includes(key) && value !== original?.[key])),
+      ));
+      await request(`/api/data?kind=${page}${edit.id ? '&id=' + edit.id : ''}`, {
         method: edit.id ? 'PATCH' : 'POST', body: JSON.stringify({ fields }),
       });
-      const id = edit.id || result.id;
-      if (pendingPhotos.length) {
-        if (!id) throw Error('SharePoint no devolvió el identificador de la lectura.');
-        setEdit(current => ({ ...current, id }));
-        for (const photo of pendingPhotos) {
-          try {
-            await uploadReadingPhoto(request, id, photo);
-            setPendingPhotos(current => current.filter(file => file.uploadId !== photo.uploadId));
-          } catch (error) {
-            throw Error(`La lectura quedó guardada. Podés volver a guardar para reintentar las fotos pendientes. ${error.message}`);
-          }
-        }
-      }
       await fetchKind(page);
     }
     setEdit(null);
-    setPendingPhotos([]);
   } catch (error) {
     setError(error.message);
   } finally {
@@ -170,6 +148,5 @@ return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><
 {page==='config'&&<><div className="heading"><div><span className="eyebrow">ADMINISTRACIÓN</span><h1>Configuraciones</h1><p>Catálogos, usuarios y permisos de acceso.</p></div></div><div className="config-grid">{[...Object.entries(modules).filter(([k])=>k!=='lecturas'),['usuarios',{title:'Administradores y usuarios',icon:Users}]].map(([k,m])=><button key={k} className="config-card" onClick={()=>go(k)}><m.icon size={25}/><strong>{m.title}</strong><span>Administrar →</span></button>)}</div></>}
 {page==='reportes'&&<><div className="heading"><div><span className="eyebrow">EXPORTACIÓN</span><h1>Reportes</h1><p>Selecciona el origen y descarga los registros.</p></div></div><div className="panel"><div className="toolbar"><select value={selected||'lecturas'} onChange={e=>setSelected(e.target.value)}>{Object.entries(modules).map(([k,m])=><option value={k} key={k}>{m.title}</option>)}</select><button className="secondary" onClick={()=>go(selected||'lecturas')}>Abrir y filtrar</button></div><p>Las exportaciones Excel y PDF se generan desde cada módulo. La plantilla exacta del reporte se integrará al incorporar el modelo original.</p></div></>}
 {(modules[page]||page==='usuarios')&&<><div className="heading"><div><button className="back" onClick={()=>go(page==='lecturas'?'inicio':'config')}><ArrowLeft size={16}/> Volver</button><h1>{page==='lecturas'?'Historial de lecturas':`Administrar ${modules[page]?.title.toLowerCase()||'usuarios'}`}</h1><p>Consulta y administración de registros de SharePoint.</p></div>{page==='lecturas'&&<button className="primary" onClick={()=>go('registro')}><Plus size={17}/> Nueva lectura</button>}{admin&&page!=='lecturas'&&<button className="primary" onClick={()=>openEditor(page==='usuarios'?{usuario:'',nombre:'',rol:'Usuario',activo:true,password:''}:Object.fromEntries(modules[page].fields.map(f=>[f,''])))}><Plus size={17}/> Nuevo registro</button>}</div><div className="panel"><div className="toolbar"><div className="search"><Search size={18}/><input placeholder="Buscar registros…" value={search} onChange={e=>setSearch(e.target.value)}/></div>{page==='lecturas'&&<><select className="filter" aria-label="Filtrar por edificio" value={filters.edificio} onChange={e=>setFilters({...filters,edificio:e.target.value})}><option value="">Todos los edificios</option>{buildingNames.map(name=><option key={name} value={name}>{name}</option>)}</select>{[['tipo','Servicio'],['mes','Mes'],['anio','Año']].map(([k,t])=><input key={k} className="filter" placeholder={t} value={filters[k]} onChange={e=>setFilters({...filters,[k]:e.target.value})}/>)}</>}<button className="secondary" onClick={()=>page==='usuarios'?request('/api/users').then(r=>setUsers(r.users||[])):fetchKind(page)}><RefreshCw size={16}/></button><button className="secondary" onClick={()=>exportFile('xlsx')}><FileDown size={16}/> Excel</button><button className="secondary" onClick={()=>exportFile('pdf')}><FileDown size={16}/> PDF</button></div><div className="table-wrap"><table><thead><tr>{tableFields.map(f=><th key={f}>{names[f]||f}</th>)}<th>Acciones</th></tr></thead><tbody>{(page==='usuarios'?users:visible).map((x,i)=><tr key={x.id||x.usuario||i}>{tableFields.map(f=><td key={f}>{f==='Logo'?<BuildingLogo key={x.LogoUrl} row={x}/>:displayValue(f,x[f])}</td>)}<td><div className="actions"><button title="Ver" onClick={()=>setSelected(x)}><Eye size={17}/></button>{admin&&<button title="Editar" onClick={()=>openEditor({...x})}><Pencil size={17}/></button>}{admin&&page!=='usuarios'&&<button title="Eliminar" onClick={()=>remove(x)}><Trash2 size={17}/></button>}</div></td></tr>)}{!(page==='usuarios'?users:visible).length&&<tr><td colSpan={tableFields.length + 1} className="empty">{busy?'Cargando…':'No hay registros para mostrar. Comprueba la conexión y las listas configuradas.'}</td></tr>}</tbody></table></div><div className="table-footer">{(page==='usuarios'?users:visible).length} registros</div></div></>}
-</main></div>{selected&&typeof selected==='object'&&<div className="overlay" onClick={()=>setSelected(null)}><section className="modal" onClick={e=>e.stopPropagation()}><h2>Detalle del registro</h2><div className="details">{(visibleDetails.length ? visibleDetails : Object.keys(selected).map(key=>({key,label:names[key]||key}))).map(({key,label})=><div key={key}><b>{names[key]||label}</b>{key==='Logo'?<BuildingLogo key={selected.LogoUrl} row={selected} fullSize/>:<span>{displayValue(key,selected[key])}</span>}</div>)}</div>{page==='lecturas'&&<ReadingPhotoGallery key={selected.id} id={selected.id} enabled={photosEnabled} request={request}/>}<button className="secondary" onClick={()=>setSelected(null)}>Cerrar</button></section></div>}{edit&&<div className="overlay" onClick={closeEditor}><section className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>{edit.id?'Editar':'Crear'} {modules[page]?.title||'usuario'}</h2><button onClick={closeEditor} disabled={busy}>×</button></div>{error&&<p className="error" role="alert">{error}</p>}<div className="form-grid">{(page==='usuarios'?['usuario','nombre','rol','activo',...(!edit.id?['password']:[])]:modules[page].fields).map(f=><label key={f}>{names[f]||f}{page==='lecturas'&&!isPages&&f==='Medidor'?<select value={edit.MedidorId||''} onChange={e=>setEdit({...edit,MedidorId:e.target.value})}>
-<option value="">Seleccioná un medidor</option>{(records.medidores||[]).map(meter=><option key={meter.id} value={meter.id}>{[meter.Title,meter.Edificio,meter.TipoMedidor].filter(Boolean).join(' · ')}</option>)}</select>:f==='rol'?<select value={edit[f]||'Usuario'} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Usuario</option><option>Admin</option></select>:f==='activo'||f==='Activo'?<select value={String(edit[f]??'Sí')} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Sí</option><option>No</option></select>:<input type={f==='password'?'password':f==='FechaLectura'?'date':'text'} value={f==='FechaLectura'?String(edit[f]??'').slice(0,10):String(edit[f]??'')} onChange={e=>setEdit({...edit,[f]:e.target.value})}/>}</label>)}</div>{page==='lecturas'&&<ReadingPhotoPicker photos={pendingPhotos} enabled={photosEnabled} disabled={busy} onPick={pickPhotos} onRemove={id=>setPendingPhotos(current=>current.filter(photo=>photo.uploadId!==id))}/>}<div className="modal-actions"><button className="secondary" onClick={closeEditor} disabled={busy}>Cancelar</button><button className="primary" disabled={busy} onClick={save}><Save size={16}/> Guardar</button></div></section></div>}</div>}
+</main></div>{selected&&typeof selected==='object'&&<div className="overlay" onClick={()=>setSelected(null)}><section className="modal" onClick={e=>e.stopPropagation()}><h2>Detalle del registro</h2><div className="details">{(visibleDetails.length ? visibleDetails : Object.keys(selected).map(key=>({key,label:names[key]||key}))).map(({key,label})=><div key={key}><b>{names[key]||label}</b>{key==='Logo'?<BuildingLogo key={selected.LogoUrl} row={selected} fullSize/>:<span>{displayValue(key,selected[key])}</span>}</div>)}</div>{page==='lecturas'&&<ReadingPhotoGallery key={selected.id} id={selected.id} enabled={photosEnabled} request={request}/>}<button className="secondary" onClick={()=>setSelected(null)}>Cerrar</button></section></div>}{edit&&<div className="overlay" onClick={closeEditor}><section className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>{edit.id?'Editar':'Crear'} {modules[page]?.title||'usuario'}</h2><button onClick={closeEditor} disabled={busy}>×</button></div>{error&&<p className="error" role="alert">{error}</p>}<div className="form-grid">{(page==='usuarios'?['usuario','nombre','rol','activo',...(!edit.id?['password']:[])]:page==='lecturas'?editableReadingFields:modules[page].fields).map(f=><label key={f}>{names[f]||f}{f==='rol'?<select value={edit[f]||'Usuario'} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Usuario</option><option>Admin</option></select>:f==='activo'||f==='Activo'?<select value={String(edit[f]??'Sí')} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Sí</option><option>No</option></select>:<input type={f==='password'?'password':f==='FechaLectura'?'date':'text'} value={f==='FechaLectura'?String(edit[f]??'').slice(0,10):String(edit[f]??'')} onChange={e=>setEdit({...edit,[f]:e.target.value})}/>}</label>)}</div><div className="modal-actions"><button className="secondary" onClick={closeEditor} disabled={busy}>Cancelar</button><button className="primary" disabled={busy} onClick={save}><Save size={16}/> Guardar</button></div></section></div>}</div>}
 createRoot(document.getElementById('root')).render(<App/>);

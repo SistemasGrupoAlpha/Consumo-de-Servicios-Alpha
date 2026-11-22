@@ -129,6 +129,17 @@
   margin-top: 12px;
 }
 
+.reading-choice-value {
+  display: block;
+  margin-top: 4px;
+  color: #315e89;
+  font-size: 12px;
+}
+
+.reading-submit {
+  margin-top: 16px;
+}
+
 .reading-service-options {
   display: flex;
   flex-wrap: wrap;

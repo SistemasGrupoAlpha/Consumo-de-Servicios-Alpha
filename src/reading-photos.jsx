@@ -39,12 +39,6 @@ export async function preparePhoto(file) {
   }
 }
 
-export function uploadReadingPhoto(request, id, photo) {
-  return request(imageUrl(id), { method: 'POST', body: JSON.stringify({
-    uploadId: photo.uploadId, photo: photo.preview.split(',')[1],
-  }) });
-}
-
 export function ReadingPhotoGallery({ id, enabled, request }) {
   const [result, setResult] = useState(null);
   useEffect(() => {
