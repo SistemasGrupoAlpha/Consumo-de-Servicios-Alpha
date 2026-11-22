@@ -48,8 +48,6 @@ export function ReadingRegistration({ request, onHistory }) {
   const selectedMeter = selectedGroup?.meter;
   const monthly = selectedGroup?.readings.filter(row => row.month === month) || [];
   const existing = monthly.find(row => row.id === readingId) ?? monthly[0];
-  const historicalIds = new Set(selectedGroup?.readings.map(row => row.meterId));
-  const conflict = !existing && (catalogs?.conflicts || []).some(row => row.month === month && historicalIds.has(row.meterId));
   const defaults = {
     FechaLectura: existing ? existing.date : month === today().slice(0, 7) ? today() : month && `${month}-01`,
     LecturaInicial: String(existing?.initial ?? ''),
@@ -92,7 +90,6 @@ export function ReadingRegistration({ request, onHistory }) {
     event.preventDefault();
     setError('');
     if (!selectedMeter) { setError('Seleccioná un medidor para registrar la lectura.'); return; }
-    if (conflict) return;
     if (!existing && !photo) { setError('Adjuntá una foto del medidor para guardar la lectura.'); return; }
     if (!existing && reading.FechaLectura.slice(0, 7) !== month) { setError('La fecha debe corresponder al mes seleccionado.'); return; }
     setWorking('Guardando lectura…');
@@ -100,7 +97,7 @@ export function ReadingRegistration({ request, onHistory }) {
       if (existing) {
         const values = Object.fromEntries(['LecturaInicial', 'LecturaFinal'].filter(key => reading[key] !== defaults[key]).map(key => [key, reading[key]]));
         const result = await request(`/api/data?kind=registro&id=${encodeURIComponent(existing.id)}`, { method: 'PATCH', body: JSON.stringify({
-          EdificioId: buildingId, MedidorId: existing.meterId, Periodo: month, fields: values,
+          EdificioId: buildingId, LocalId: localId, MedidorId: existing.meterId, Periodo: month, fields: values,
         }) });
         setCatalogs(current => ({...current, readings: current.readings.map(row => row.id === existing.id ? {
           ...row, initial: result.fields.LecturaInicial ?? row.initial, final: result.fields.LecturaFinal ?? row.final,
@@ -180,8 +177,7 @@ export function ReadingRegistration({ request, onHistory }) {
               changeContext(); setReadingId(row.id);
             }}><span><strong>{row.date || row.month}</strong>{row.final != null && <span className="reading-choice-value">Lectura final {row.final}</span>}</span><small>#{row.id}</small></button>)}
           </div></fieldset>}
-          {conflict && <p className="error" role="status">Hay una lectura de este mes con otro edificio asociado. Revisá el historial antes de registrar otra.</p>}
-          {monthReady && !conflict && <>
+          {monthReady && <>
           {existing && <p className="reading-month-status" role="status">Lectura del mes guardada. Podés corregir sus valores.</p>}
           <div className="form-grid reading-registration-fields">
             <label>Fecha de lectura<input type="date" required={!existing} readOnly={Boolean(existing)} value={reading.FechaLectura} onChange={event => setDraft({ ...draft, FechaLectura: event.target.value })}/></label>
@@ -194,7 +190,7 @@ export function ReadingRegistration({ request, onHistory }) {
         </>}
         {error && <p className="error" role="alert">{error}</p>}
         {saved && <p className="reading-saved" role="status">{saved}</p>}
-        {selectedMeter && monthReady && !conflict && <button type="submit" className="primary reading-submit"><Save size={16}/>{working || (existing ? 'Guardar cambios' : 'Guardar lectura')}</button>}
+        {selectedMeter && monthReady && <button type="submit" className="primary reading-submit"><Save size={16}/>{working || (existing ? 'Guardar cambios' : 'Guardar lectura')}</button>}
       </fieldset>
     </form>}
   </>;

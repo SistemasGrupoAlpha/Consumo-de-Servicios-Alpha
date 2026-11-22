@@ -51,7 +51,7 @@ const demoRequest = async (url, opts = {}) => {
     const kind = query.get('kind');
     if (kind === 'registro' && method === 'GET') return {
       buildings: demoData.edificios, locals: demoData.locales, meters: demoData.medidores,
-      readings: demoData.lecturas.map(row => ({ id: row.id, meterId: readingMeterId(row), month: readingMonth(row), date: row.FechaLectura, initial: row.LecturaInicial, final: row.LecturaFinal })), conflicts: [],
+      readings: demoData.lecturas.map(row => ({ id: row.id, meterId: readingMeterId(row), month: readingMonth(row), date: row.FechaLectura, initial: row.LecturaInicial, final: row.LecturaFinal })),
     };
     if (kind === 'registro' && method === 'PATCH') {
       const { fields } = JSON.parse(opts.body);
