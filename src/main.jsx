@@ -3,6 +3,7 @@ import { ReadingPhotoGallery } from './reading-photos';
 import { ReadingRegistration } from './reading-registration';
 import { ReadingHistoryFilters, historyLocationId } from './reading-history';
 import { ReadingBuildingCards, sortByTitle } from './reading-cards';
+import { BuildingAccess } from './building-access';
 import { billedReadingFields, historyLocations, localBuildingId, meterHasService, meterLocalId, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingSummary, registrationDirectory } from '../lib/registro-lecturas.mjs';
 const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','CuotaCondonadaAgua','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
 function displayValue(field, value) {
@@ -22,7 +23,7 @@ function BuildingLogo({ row, fullSize = false }) {
     {unavailable ? 'Abrir en SharePoint' : <img className={fullSize ? 'building-logo-detail' : undefined} src={row.LogoUrl} alt={name} loading={fullSize ? 'eager' : 'lazy'} onError={()=>setUnavailable(true)}/>}
   </a>;
 }
-const groupedCatalogs = new Set(['locales', 'medidores', 'accesos']);
+const groupedCatalogs = new Set(['locales', 'medidores']);
 const editableReadingFields = ['LecturaFinal'];
 const readingTableFields = ['FechaLectura', 'Medidor', 'TipoMedidor', 'LecturaInicial', 'LecturaFinal', 'Consumo', 'TotalPagar'];
 const names={Title:'Nombre / Código',Abreviatura:'Abreviatura',CuotaAgua:'Cuota de agua',CuotaEnergia:'Cuota de energía',CuotaCondonadaAgua:'Consumo de agua condonado',Edificio:'Edificio',Cliente:'Cliente',MedidorEnergia:'Medidor de energía',MedidorAgua:'Medidor de agua',Metros2:'Metros²',DotacionAgua:'Dotación de agua',Observacion:'Observación',TipoMedidor:'Tipo de medidor',UnidadMedida:'Unidad de medida',NumeroSerie:'Número de serie',FechaLectura:'Fecha de lectura',LecturaInicial:'Lectura inicial',LecturaFinal:'Lectura final',CuotaAplicada:'Cuota aplicada',TotalPagar:'Total a pagar',Anio:'Año',Correo:'Correo',Activo:'Activo'};
@@ -36,6 +37,8 @@ const demoData = {
   accesos: [],
 };
 const demoPhotos = new Map();
+const demoAccounts = [demoUser, { usuario:'operador.demo',nombre:'Operador Demo',rol:'Usuario',activo:true }];
+const demoAccess = new Map([['operador.demo',['1']]]);
 function demoBill(meter, building, month, final, existing) {
   const readings = demoData.lecturas.filter(row => readingMeterId(row) === meter.id).map(row => readingSummary(row, meter.id));
   const saved = existing && readingSummary(existing, meter.id);
@@ -49,7 +52,17 @@ const demoRequest = async (url, opts = {}) => {
   if (url === '/api/me') return { user: sessionStorage.getItem('alpha_demo') ? demoUser : null };
   if (url === '/api/login') throw Error('En GitHub Pages no hay autenticación real. Usá el botón Entrar en modo demostración.');
   if (url === '/api/logout') { sessionStorage.removeItem('alpha_demo'); return { ok: true }; }
-  if (url === '/api/users') return { users: [demoUser] };
+  if (url === '/api/users') return { users: demoAccounts };
+  if (url.startsWith('/api/building-access')) {
+    const usuario = new URLSearchParams(url.split('?')[1]).get('usuario');
+    if (method === 'POST') {
+      const { usuario: account, buildings } = JSON.parse(opts.body);
+      demoAccess.set(account, [...buildings].sort());
+      return { buildings: demoAccess.get(account), revision: demoAccess.get(account).join(',') };
+    }
+    const buildings = demoAccess.get(usuario) || [];
+    return { buildings, revision: buildings.join(',') };
+  }
   const query = new URLSearchParams(url.split('?')[1]);
   const id = query.get('id');
   if (url.startsWith('/api/fotos?')) {
@@ -207,7 +220,7 @@ useEffect(() => {
 useEffect(() => {
   if (!user) return;
   const controller = new AbortController();
-  if (modules[page] && (!buildingScoped || selectedBuilding)) fetchKind(page, buildingId, controller.signal);
+  if (modules[page] && page !== 'accesos' && (!buildingScoped || selectedBuilding)) fetchKind(page, buildingId, controller.signal);
   if (page === 'usuarios') request('/api/users', { signal: controller.signal })
     .then(result => { if (!controller.signal.aborted) setUsers(result.users || []); })
     .catch(error => { if (!controller.signal.aborted) setError(error.message); });
@@ -333,9 +346,17 @@ const menu=[['inicio','Inicio',LayoutDashboard],['registro','Registro de lectura
 return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><div className="logo"><span className="brand-icon">A</span><div><b>GRUPO ALPHA</b><small>Consumo de Servicios</small></div></div><nav>{menu.map(([k,t,I])=><button key={k} className={page===k?'active':''} onClick={()=>go(k)}><I size={19}/>{t}</button>)}</nav><div className="sidebar-foot"><span>{user.nombre||user.usuario}<small>{user.rol}</small></span><button title="Cerrar sesión" onClick={async()=>{await request('/api/logout',{method:'POST'});setUser(null);setRecords({});setBuildings(null);setBuildingsError('');setHistoryFilters({building:'',local:'',month:'',service:''});go('inicio')}}><LogOut size={18}/></button></div></aside><div className="workspace"><header className="topbar"><button className="iconbtn hamburger" aria-label="Menú de navegación" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}><Menu/></button><div className="breadcrumb">Grupo Alpha <span>/</span> {modules[page]?.title||({inicio:'Inicio',registro:'Registro de lecturas',reportes:'Reportes',config:'Configuraciones',usuarios:'Usuarios'}[page]||page)}</div><div className="avatar">{(user.nombre||user.usuario).slice(0,2).toUpperCase()}</div></header><main className="content">{error&&<div className="error banner">{error}<button onClick={()=>setError('')}>×</button></div>}
 {page==='inicio'&&<><div className="heading"><div><span className="eyebrow">PANEL GENERAL</span><h1>Consumo de Servicios</h1><p>Gestión centralizada de edificios, medidores y lecturas.</p></div><button className="primary" onClick={()=>go('lecturas')}><History size={17}/> Ver lecturas</button></div><div className="stats">{[['Edificios',Building2,'edificios'],['Locales',Store,'locales'],['Medidores',Gauge,'medidores'],['Lecturas',Activity,'lecturas']].map(([t,I,k])=><button className="stat" key={k} onClick={()=>go(k)}><I size={23}/><span>{t}</span><strong>{(k==='edificios' ? buildings?.length : records[k]?.length) ?? '—'}</strong><small>Ver registros →</small></button>)}</div><div className="panel"><h2>Accesos rápidos</h2><div className="quick">{[['Historial de lecturas','lecturas',History],['Configuraciones','config',Settings],['Exportar reportes','reportes',FileDown]].map(([t,k,I])=><button onClick={()=>go(k)} key={k}><I size={22}/><b>{t}</b><span>→</span></button>)}</div></div></>}
 {page==='registro'&&<ReadingRegistration request={request} buildings={buildings} buildingsError={buildingsError} reloadBuildings={reloadBuildings} onHistory={()=>go('lecturas')}/>}
-{page==='config'&&<><div className="heading"><div><span className="eyebrow">ADMINISTRACIÓN</span><h1>Configuraciones</h1><p>Catálogos, usuarios y permisos de acceso.</p></div></div><div className="config-grid">{[...Object.entries(modules).filter(([k])=>k!=='lecturas'),['usuarios',{title:'Administradores y usuarios',icon:Users}]].map(([k,m])=><button key={k} className="config-card" onClick={()=>go(k)}><m.icon size={25}/><strong>{m.title}</strong><span>Administrar →</span></button>)}</div></>}
-{page==='reportes'&&<><div className="heading"><div><span className="eyebrow">EXPORTACIÓN</span><h1>Reportes</h1><p>Selecciona el origen y descarga los registros.</p></div></div><div className="panel"><div className="toolbar"><select value={selected||'lecturas'} onChange={e=>setSelected(e.target.value)}>{Object.entries(modules).map(([k,m])=><option value={k} key={k}>{m.title}</option>)}</select><button className="secondary" onClick={()=>go(selected||'lecturas')}>Abrir y filtrar</button></div><p>Las exportaciones Excel y PDF se generan desde cada módulo. La plantilla exacta del reporte se integrará al incorporar el modelo original.</p></div></>}
-{(modules[page]||page==='usuarios')&&<><div className="heading"><div><button className="back" onClick={()=>go(page==='lecturas'?'inicio':'config')}><ArrowLeft size={16}/> Volver</button><h1>{page==='lecturas'?'Historial de lecturas':`Administrar ${modules[page]?.title.toLowerCase()||'usuarios'}`}</h1><p>Consulta y administración de registros de SharePoint.</p></div>{page==='lecturas'&&<button className="primary" onClick={()=>go('registro')}><Plus size={17}/> Nueva lectura</button>}{admin&&!history&&(!grouped||selectedBuilding)&&<button className="primary" onClick={()=>openEditor(page==='usuarios'?{usuario:'',nombre:'',rol:'Usuario',activo:true,password:''}:Object.fromEntries(modules[page].fields.map(f=>[f,''])))}><Plus size={17}/> Nuevo registro</button>}</div><div className="panel">
+{page==='config'&&<><div className="heading"><div><span className="eyebrow">ADMINISTRACIÓN</span><h1>Configuraciones</h1><p>Catálogos, usuarios y permisos de acceso.</p></div></div><div className="config-grid">{[...Object.entries(modules).filter(([k])=>k!=='lecturas'&&(k!=='accesos'||admin)),['usuarios',{title:'Administradores y usuarios',icon:Users}]].map(([k,m])=><button key={k} className="config-card" onClick={()=>go(k)}><m.icon size={25}/><strong>{m.title}</strong><span>Administrar →</span></button>)}</div></>}
+{page==='reportes'&&<><div className="heading"><div><span className="eyebrow">EXPORTACIÓN</span><h1>Reportes</h1><p>Selecciona el origen y descarga los registros.</p></div></div><div className="panel"><div className="toolbar"><select value={selected||'lecturas'} onChange={e=>setSelected(e.target.value)}>{Object.entries(modules).filter(([k])=>k!=='accesos').map(([k,m])=><option value={k} key={k}>{m.title}</option>)}</select><button className="secondary" onClick={()=>go(selected||'lecturas')}>Abrir y filtrar</button></div><p>Las exportaciones Excel y PDF se generan desde cada módulo. La plantilla exacta del reporte se integrará al incorporar el modelo original.</p></div></>}
+{page==='accesos'&&admin&&<>
+  <div className="heading"><div>
+    <button className="back" onClick={()=>go('config')}><ArrowLeft size={16}/> Volver</button>
+    <h1>Accesos a edificios</h1>
+    <p>Elegí un usuario y marcá los edificios a los que puede acceder.</p>
+  </div></div>
+  <BuildingAccess request={request} buildings={buildings} buildingsError={buildingsError} reloadBuildings={reloadBuildings}/>
+</>}
+{((modules[page]&&page!=='accesos')||page==='usuarios')&&<><div className="heading"><div><button className="back" onClick={()=>go(page==='lecturas'?'inicio':'config')}><ArrowLeft size={16}/> Volver</button><h1>{page==='lecturas'?'Historial de lecturas':`Administrar ${modules[page]?.title.toLowerCase()||'usuarios'}`}</h1><p>Consulta y administración de registros de SharePoint.</p></div>{page==='lecturas'&&<button className="primary" onClick={()=>go('registro')}><Plus size={17}/> Nueva lectura</button>}{admin&&!history&&(!grouped||selectedBuilding)&&<button className="primary" onClick={()=>openEditor(page==='usuarios'?{usuario:'',nombre:'',rol:'Usuario',activo:true,password:''}:Object.fromEntries(modules[page].fields.map(f=>[f,''])))}><Plus size={17}/> Nuevo registro</button>}</div><div className="panel">
 {buildingScoped && <div className="catalog-building-picker">
   {buildingsError && <p role="alert" className="error">{buildingsError} <button type="button" className="secondary" onClick={reloadBuildings}>Reintentar</button></p>}
   {buildings?.length ? <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding}/>

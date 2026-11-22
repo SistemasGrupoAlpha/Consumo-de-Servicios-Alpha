@@ -339,3 +339,46 @@
 .catalog-building-picker + .reading-history-filters {
   margin-top: 22px;
 }
+
+.building-access > fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.building-access-user {
+  display: grid;
+  gap: 8px;
+  width: min(100%, 440px);
+  font-weight: 650;
+}
+
+.building-access-user select {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid #dfe5ed;
+  border-radius: 8px;
+  background: white;
+}
+
+.building-access-options {
+  margin-top: 22px;
+}
+
+.building-access-options .reading-choice {
+  cursor: pointer;
+}
+
+.building-access-options .reading-choice:has(input:checked) {
+  border-color: #087ad2;
+  background: #eaf4ff;
+}
+
+.building-access-options input[type="checkbox"] {
+  flex: 0 0 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #087ad2;
+}

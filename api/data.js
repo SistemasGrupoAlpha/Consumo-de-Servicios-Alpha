@@ -1,6 +1,7 @@
 const {g}=require('../lib/graph');const {siteId,listId}=require('../lib/consumo-sharepoint');const {route,send,fail}=require('../lib/http');
 const {columnsFor,mapColumns,resolveLookups,readItems}=require('../lib/consumo-columnas');
 const Photos=require('../lib/sharepoint-photos');
+const { allowedBuildings, requireBuildingAccess } = require('../lib/consumo-accesos');
 const {catalogItem,readingUpdates,registrationFields}=require('../lib/consumo-lecturas');
 const keys={edificios:'SP_LIST_EDIFICIOS',locales:'SP_LIST_LOCALES',medidores:'SP_LIST_MEDIDORES',lecturas:'SP_LIST_LECTURAS',accesos:'SP_LIST_ACCESOS'};
 const buildingCatalogs = new Set(['locales', 'medidores', 'accesos']);
@@ -15,16 +16,6 @@ async function registrationRows(site, kind) {
   const list = await listId(site, keys[kind]);
   const [items, columns] = await Promise.all([all(`${itemsPath(site, list)}?$expand=fields&$top=500`), columnsFor(site, list)]);
   return readItems(kind, items, mapColumns(kind, columns, items), new Map());
-}
-
-async function allowedBuildings(site, user) {
-  if (user.rol === 'Admin') return null;
-  const { isEnabled, localBuildingId } = await import('../lib/registro-lecturas.mjs');
-  const identity = value => String(value || '').trim().toLowerCase();
-  const accounts = new Set([identity(user.usuario), identity(user.email)].filter(Boolean));
-  const rows = await registrationRows(site, 'accesos');
-  return new Set(rows.filter(row => isEnabled(row.Activo) && accounts.has(identity(row.Correo)))
-    .map(localBuildingId).filter(Boolean));
 }
 
 async function readingDirectory(site) {
@@ -43,6 +34,7 @@ async function buildingChoices(site, user) {
 
 async function registrationCatalog(site, user, buildingId) {
   const allowed = await allowedBuildings(site, user);
+  if (buildingId && allowed && !allowed.has(buildingId)) throw fail(403, 'No tenés acceso a este edificio.');
   if (allowed?.size === 0) return { buildings: [], locals: [], meters: [], readings: [] };
   const { localBuildingId, meterLocalId, readingMonth, readingSummary } = await import('../lib/registro-lecturas.mjs');
   const [buildings, directory, rows] = await Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), registrationRows(site, 'lecturas')]);
@@ -151,8 +143,7 @@ async function patchReadingValues(site, list, req, res, user, fromRegistration) 
   }
   if (fromRegistration) {
     if (![EdificioId, MedidorId].every(value => typeof value === 'string' && /^\d+$/.test(value))) throw fail(400, 'Seleccioná un edificio y un medidor válidos.');
-    const allowed = await allowedBuildings(site, user);
-    if (allowed && !allowed.has(EdificioId)) throw fail(403, 'No tenés acceso para editar lecturas en este edificio.');
+    await requireBuildingAccess(site, user, EdificioId);
   }
   const helpers = await import('../lib/registro-lecturas.mjs');
   const {localBuildingId, meterLocalId, readingMonth, readingNumber, readingSummary} = helpers;
@@ -224,22 +215,23 @@ if (kind === 'registro' && req.method === 'PATCH') {
 if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
-  const scoped = buildingId && (buildingCatalogs.has(kind) || kind === 'lecturas');
-  const allowed = scoped ? await allowedBuildings(site, user) : null;
-  if (allowed && !allowed.has(buildingId)) throw fail(403, 'No tenés acceso a este edificio.');
+  const scoped = Boolean(buildingId);
+  if (kind === 'accesos' && user.rol !== 'Admin') throw fail(403, 'Solo los administradores pueden administrar accesos.');
+  const allowed = await allowedBuildings(site, user);
+  if (scoped && allowed && !allowed.has(buildingId)) throw fail(403, 'No tenés acceso a este edificio.');
+  if (allowed?.size === 0) return send(res, 200, { items: [], columns: [], photosEnabled: false });
   const listDetails = kind === 'edificios' ? g(`${listPath(site, list)}?$select=webUrl`) : null;
   const history = kind === 'lecturas'
-    ? Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), scoped ? allowed : allowedBuildings(site, user), import('../lib/registro-lecturas.mjs')])
+    ? Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), import('../lib/registro-lecturas.mjs')])
     : null;
   const [items, columns, details, locations] = await Promise.all([all(`${base}?$expand=fields&$top=500`), columnsFor(site, list), listDetails, history]);
   const mapping = mapColumns(kind, columns, items);
   const lookupKey = mapping.get('Edificio')?.name;
-  const filteredItems = scoped && lookupKey
-    ? items.filter(item => {
-      const linked = String(item.fields?.[`${lookupKey}LookupId`] ?? '');
-      return linked === buildingId || (kind === 'lecturas' && !linked);
-    })
-    : items;
+  const filteredItems = scoped || allowed ? items.filter(item => {
+    const linked = kind === 'edificios' ? String(item.id) : String(item.fields?.[`${lookupKey}LookupId`] ?? '');
+    if (!linked && kind === 'lecturas') return true; // The meter resolves older readings without an explicit building.
+    return (!scoped || linked === buildingId) && (!allowed || allowed.has(linked));
+  }) : items;
   const lookupMapping = kind === 'lecturas' && scoped
     ? new Map([...mapping].filter(([field]) => field !== 'Edificio' && field !== 'Local'))
     : mapping;
@@ -258,11 +250,9 @@ if (req.method === 'GET') {
       }
     }
   }
-  let visible = kind === 'accesos' && user.rol !== 'Admin'
-    ? rows.filter(item => String(item.Correo || '').trim().toLowerCase() === user.usuario)
-    : rows;
+  let visible = rows;
   if (locations) {
-    const [buildings, directory, allowed, { historyLocations }] = locations;
+    const [buildings, directory, { historyLocations }] = locations;
     visible = historyLocations(rows, buildings, directory, allowed);
     if (scoped) visible = visible.filter(row => row.EdificioHistorialId === buildingId);
   }
@@ -278,8 +268,7 @@ const id=String(req.query?.id||'');let fields=req.body?.fields;
 if(req.method!=='DELETE'&&(!fields||typeof fields!=='object'||Array.isArray(fields)))throw fail(400,'Campos inválidos');
 if(fields&& (Object.keys(fields).length>40||JSON.stringify(fields).length>12000||Object.keys(fields).some(k=>! /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||k==='id')))throw fail(400,'Campos no permitidos');
 if (registering) {
-  const allowed = await allowedBuildings(site, user);
-  if (allowed && !allowed.has(fields.EdificioId)) throw fail(403, 'No tenés acceso para registrar lecturas en este edificio.');
+  await requireBuildingAccess(site, user, fields.EdificioId);
   const { uploadId, bytes } = Photos.decodeReadingPhoto(req.body);
   if (Object.keys(fields).some(key=>!['EdificioId','LocalId','MedidorId','Servicio','FechaLectura','LecturaFinal'].includes(key))) throw fail(400,'La cuota, la lectura inicial y los totales se calculan automáticamente.');
   if (typeof fields.EdificioId !== 'string' || !/^\d+$/.test(fields.EdificioId) || typeof fields.FechaLectura !== 'string') throw fail(400,'Seleccioná un edificio y una fecha válidos.');
