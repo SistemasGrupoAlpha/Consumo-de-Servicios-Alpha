@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Droplets, Gauge, Save, Zap } from 'lucide-react';
-import { hasMonthlyReading, localBuildingId, localHasService, meterHasService, meterLocalId, metersWithHistory, previousReadingValue, readingCharges, readingServices } from '../lib/registro-lecturas.mjs';
+import { hasMonthlyReading, localBuildingId, localHasService, meterHasService, meterLocalId, metersWithHistory, previousReadingValue, readingCharges, readingNumber, readingServices, readingSummary } from '../lib/registro-lecturas.mjs';
 import { preparePhoto, ReadingPhotoPicker } from './reading-photos';
 
+import { OPERATOR } from '../lib/roles.mjs';
 import { ReadingBuildingCards, ReadingCompletion, ReadingLocalCards, sortByTitle } from './reading-cards';
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Tegucigalpa' }).format(new Date());
 const serviceIcons = { agua: Droplets, energia: Zap };
 const amount = new Intl.NumberFormat('es-HN', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const quantity = new Intl.NumberFormat('es-HN', { maximumFractionDigits:9 });
 
-export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings }) {
+export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings, role }) {
   const [catalogs, setCatalogs] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -58,13 +59,17 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
   const selectedMeter = selectedGroup?.meter;
   const monthly = selectedGroup?.readings.filter(row => row.month === month) || [];
   const existing = monthly.find(row => row.id === readingId) ?? monthly[0];
+  const currentMonth = today().slice(0, 7);
+  const readOnly = role === OPERATOR && (Boolean(existing) || month !== currentMonth);
   const defaults = {
     FechaLectura: existing ? existing.date : month === today().slice(0, 7) ? today() : month && `${month}-01`,
     LecturaFinal: String(existing?.final ?? ''),
   };
   const reading = { ...defaults, ...draft };
-  const initial = previousReadingValue(selectedGroup?.readings || [], month, existing);
-  const charges = readingCharges(billingBuilding, selectedMeter?.TipoMedidor, initial, reading.LecturaFinal);
+  const initial = readOnly ? readingNumber(existing?.initial) : previousReadingValue(selectedGroup?.readings || [], month, existing);
+  const charges = readOnly ? {
+    consumption: readingNumber(existing?.consumption), rate: readingNumber(existing?.rate), total: readingNumber(existing?.total),
+  } : readingCharges(billingBuilding, selectedMeter?.TipoMedidor, initial, reading.LecturaFinal);
   const billingError = initial === null ? 'No hay una lectura anterior con valor final para usar como inicial.'
     : charges.rate === null || charges.rate < 0 ? 'La cuota de este servicio se configura en Edificios.'
     : charges.final !== null && charges.final < initial ? 'La lectura final debe ser igual o mayor que la inicial.' : '';
@@ -103,6 +108,7 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
   async function save(event) {
     event.preventDefault();
     setError('');
+    if (readOnly) return;
     if (!selectedMeter) { setError('Seleccioná un medidor para registrar la lectura.'); return; }
     if (billingError) { setError(billingError); return; }
     if (!existing && !photo) { setError('Adjuntá una foto del medidor para guardar la lectura.'); return; }
@@ -125,8 +131,9 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
           fields: { EdificioId: buildingId, Servicio: service, LocalId: localId, MedidorId: meterId, ...reading },
           uploadId: photo.uploadId, photo: photo.preview.split(',')[1],
         }) });
-        setCatalogs(current => ({...current, readings: [...current.readings, { id: String(result.id), meterId, month,
-          date: reading.FechaLectura, initial: result.fields.LecturaInicial, final: result.fields.LecturaFinal }]}));
+        setCatalogs(current => ({...current, readings: [...current.readings, readingSummary({
+          ...result.fields, id: result.id, FechaLectura: reading.FechaLectura,
+        }, meterId)]}));
         changeContext();
         setSaved('Lectura y foto guardadas.');
       }
@@ -183,12 +190,13 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
             }}><span><strong>{row.date || row.month}</strong>{row.final != null && <span className="reading-choice-value">Lectura final {row.final}</span>}</span><small>#{row.id}</small></button>)}
           </div></fieldset>}
           {monthReady && <>
-          {existing && <p className="reading-month-status" role="status">Lectura del mes guardada. Podés corregir la lectura final.</p>}
+          {existing && <p className="reading-month-status" role="status">{readOnly ? 'Lectura guardada. Solo consulta.' : 'Lectura del mes guardada. Podés corregir la lectura final.'}</p>}
+          {readOnly && !existing ? <p role="status">Este mes es de consulta y no tiene una lectura registrada.</p> : <>
           <div className="form-grid reading-registration-fields">
-            <label>Fecha de lectura<input type="date" required={!existing} readOnly={Boolean(existing)} value={reading.FechaLectura} onChange={event => setDraft({ ...draft, FechaLectura: event.target.value })}/></label>
+            <label>Fecha de lectura<input type="date" required={!existing} readOnly={Boolean(existing) || readOnly} value={reading.FechaLectura} onChange={event => setDraft({ ...draft, FechaLectura: event.target.value })}/></label>
             <label>Lectura inicial{selectedMeter.UnidadMedida && ` (${selectedMeter.UnidadMedida})`}<input readOnly value={initial ?? ''}/></label>
             <label>Lectura final{selectedMeter.UnidadMedida && ` (${selectedMeter.UnidadMedida})`}
-              <input required inputMode="decimal" pattern="-?[0-9]+([.,][0-9]+)?" value={reading.LecturaFinal} onChange={event => { setDraft({ ...draft, LecturaFinal: event.target.value }); setSaved(''); }}/>
+              <input required readOnly={readOnly} inputMode="decimal" pattern="-?[0-9]+([.,][0-9]+)?" value={reading.LecturaFinal} onChange={event => { setDraft({ ...draft, LecturaFinal: event.target.value }); setSaved(''); }}/>
             </label>
           </div>
           <dl className="reading-charge-summary" aria-live="polite">
@@ -197,13 +205,14 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
             <div><dt>Cuota aplicada</dt><dd>{charges.rate === null ? '—' : quantity.format(charges.rate)}</dd></div>
             <div><dt>Total del mes</dt><dd>{charges.total === null ? '—' : amount.format(charges.total)}</dd></div>
           </dl>
-          {billingError && <p className="error" role="status">{billingError}</p>}
-          {!existing && <ReadingPhotoPicker photos={photo ? [photo] : []} enabled single required disabled={Boolean(working)} onPick={pickPhoto} onRemove={() => setPhoto(null)}/>}
+          {!readOnly && billingError && <p className="error" role="status">{billingError}</p>}
+          {!readOnly && !existing && <ReadingPhotoPicker photos={photo ? [photo] : []} enabled single required disabled={Boolean(working)} onPick={pickPhoto} onRemove={() => setPhoto(null)}/>}
+          </>}
           </>}
         </>}
         {error && <p className="error" role="alert">{error}</p>}
         {saved && <p className="reading-saved" role="status">{saved}</p>}
-        {selectedMeter && monthReady && <button type="submit" className="primary reading-submit" disabled={Boolean(billingError)}><Save size={16}/>{working || (existing ? 'Guardar cambios' : 'Guardar lectura')}</button>}
+        {selectedMeter && monthReady && !readOnly && <button type="submit" className="primary reading-submit" disabled={Boolean(billingError)}><Save size={16}/>{working || (existing ? 'Guardar cambios' : 'Guardar lectura')}</button>}
       </fieldset>
     </form>}
   </>;

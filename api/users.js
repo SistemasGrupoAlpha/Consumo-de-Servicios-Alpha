@@ -1,8 +1,9 @@
 const SP = require('../lib/consumo-usuarios'), Auth = require('../lib/auth'), { route, send, fail } = require('../lib/http');
 module.exports = route(['GET', 'POST'], async (req, res, user) => {
   if (req.method === 'GET') {
-    const admin = user.rol === 'Admin', all = await SP.loadUsers(admin);
-    return send(res, 200, { users: all.filter(u => admin || u.activo).map(u => ({ usuario: u.usuario, email: u.usuario, nombre: u.nombre, puesto: u.puesto, team: u.team, rol: u.rol, ...(admin ? { activo: u.activo } : {}) })) });
+    if (user.rol !== 'Admin') throw fail(403, 'Solo para administradores.');
+    const all = await SP.loadUsers(true);
+    return send(res, 200, { users: all.map(u => ({ usuario: u.usuario, email: u.usuario, nombre: u.nombre, puesto: u.puesto, team: u.team, rol: u.rol, activo: u.activo })) });
   }
   const b = req.body || {};
   if (b.action === 'password') {                                   // cualquier usuario cambia su propia contraseña
@@ -14,7 +15,8 @@ module.exports = route(['GET', 'POST'], async (req, res, user) => {
   }
   if (user.rol !== 'Admin') throw fail(403, 'Solo para administradores.');
   const usuario = String(b.usuario || '').trim().toLowerCase();
-  if (usuario === user.usuario && (b.activo === false || b.activo === 'No' || b.rol !== 'Admin')) throw fail(400, 'No podés desactivarte ni quitarte el rol de administrador a vos mismo.');
+  const { normalizeRole } = await import('../lib/roles.mjs');
+  if (usuario === user.usuario && (b.activo === false || b.activo === 'No' || normalizeRole(b.rol) !== 'Admin')) throw fail(400, 'No podés desactivarte ni quitarte el rol de administrador a vos mismo.');
   await SP.saveUser(b, Auth.hashPassword);
   send(res, 200, { ok: true });
 }, {});

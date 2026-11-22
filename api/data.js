@@ -1,4 +1,4 @@
-const {g}=require('../lib/graph');const {siteId,listId}=require('../lib/consumo-sharepoint');const {route,send,fail}=require('../lib/http');
+const {g}=require('../lib/graph');const {siteId,listId}=require('../lib/consumo-sharepoint');const {route,send,fail,todayHN,dateOk}=require('../lib/http');
 const {columnsFor,mapColumns,resolveLookups,readItems}=require('../lib/consumo-columnas');
 const Photos=require('../lib/sharepoint-photos');
 const { allowedBuildings, requireBuildingAccess } = require('../lib/consumo-accesos');
@@ -135,6 +135,8 @@ async function scopedCatalogUpdates(site, list, kind, fields, buildingId, creati
 }
 
 async function patchReadingValues(site, list, req, res, user, fromRegistration) {
+  const { canReport } = await import('../lib/roles.mjs');
+  if (!canReport(user.rol)) throw fail(403, 'Tu rol permite registrar lecturas nuevas y consultar las ya guardadas.');
   const id = String(req.query?.id || '');
   const { fields, EdificioId, MedidorId, Periodo } = req.body || {};
   const editable = ['LecturaFinal'];
@@ -215,6 +217,13 @@ if (kind === 'registro' && req.method === 'PATCH') {
 if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
+  const reporting = kind === 'lecturas' && req.query?.view === 'reporte';
+  const reportMeter = String(req.query?.medidor || '');
+  if (reporting) {
+    const { canReport } = await import('../lib/roles.mjs');
+    if (!canReport(user.rol)) throw fail(403, 'Tu rol no permite generar reportes.');
+    if (!buildingId || !/^\d+$/.test(reportMeter)) throw fail(400, 'Seleccioná un edificio y un medidor.');
+  }
   const scoped = Boolean(buildingId);
   if (kind === 'accesos' && user.rol !== 'Admin') throw fail(403, 'Solo los administradores pueden administrar accesos.');
   const allowed = await allowedBuildings(site, user);
@@ -255,6 +264,7 @@ if (req.method === 'GET') {
     const [buildings, directory, { historyLocations }] = locations;
     visible = historyLocations(rows, buildings, directory, allowed);
     if (scoped) visible = visible.filter(row => row.EdificioHistorialId === buildingId);
+    if (reporting) visible = visible.filter(row => row.MedidorHistorialId === reportMeter);
   }
   const fieldsByName = new Map([...mapping].map(([field, column]) => [column.name, field]));
   const visibleKeys = new Set(visible.flatMap(Object.keys));
@@ -269,6 +279,11 @@ if(req.method!=='DELETE'&&(!fields||typeof fields!=='object'||Array.isArray(fiel
 if(fields&& (Object.keys(fields).length>40||JSON.stringify(fields).length>12000||Object.keys(fields).some(k=>! /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||k==='id')))throw fail(400,'Campos no permitidos');
 if (registering) {
   await requireBuildingAccess(site, user, fields.EdificioId);
+  if (!dateOk(fields.FechaLectura)) throw fail(400, 'Seleccioná una fecha de lectura válida.');
+  const { OPERATOR } = await import('../lib/roles.mjs');
+  if (user.rol === OPERATOR && fields.FechaLectura.slice(0, 7) !== todayHN().slice(0, 7)) {
+    throw fail(403, 'Tu rol permite registrar lecturas del mes actual.');
+  }
   const { uploadId, bytes } = Photos.decodeReadingPhoto(req.body);
   if (Object.keys(fields).some(key=>!['EdificioId','LocalId','MedidorId','Servicio','FechaLectura','LecturaFinal'].includes(key))) throw fail(400,'La cuota, la lectura inicial y los totales se calculan automáticamente.');
   if (typeof fields.EdificioId !== 'string' || !/^\d+$/.test(fields.EdificioId) || typeof fields.FechaLectura !== 'string') throw fail(400,'Seleccioná un edificio y una fecha válidos.');
