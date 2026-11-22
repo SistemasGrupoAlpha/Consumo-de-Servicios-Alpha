@@ -219,10 +219,14 @@ const site=await siteId();const list=await listId(site,keys[kind]);const base=it
 if (req.method === 'GET') {
   const reporting = kind === 'lecturas' && req.query?.view === 'reporte';
   const reportMeter = String(req.query?.medidor || '');
+  const reportService = String(req.query?.servicio || '');
   if (reporting) {
     const { canReport } = await import('../lib/roles.mjs');
     if (!canReport(user.rol)) throw fail(403, 'Tu rol no permite generar reportes.');
-    if (!buildingId || !/^\d+$/.test(reportMeter)) throw fail(400, 'Seleccioná un edificio y un medidor.');
+    const { readingServices } = await import('../lib/registro-lecturas.mjs');
+    if (!buildingId || !/^\d+$/.test(reportMeter) || !Object.hasOwn(readingServices, reportService)) {
+      throw fail(400, 'Seleccioná un edificio, un medidor y un servicio.');
+    }
   }
   const scoped = Boolean(buildingId);
   if (kind === 'accesos' && user.rol !== 'Admin') throw fail(403, 'Solo los administradores pueden administrar accesos.');
@@ -261,10 +265,10 @@ if (req.method === 'GET') {
   }
   let visible = rows;
   if (locations) {
-    const [buildings, directory, { historyLocations }] = locations;
+    const [buildings, directory, { historyLocations, meterHasService }] = locations;
     visible = historyLocations(rows, buildings, directory, allowed);
     if (scoped) visible = visible.filter(row => row.EdificioHistorialId === buildingId);
-    if (reporting) visible = visible.filter(row => row.MedidorHistorialId === reportMeter);
+    if (reporting) visible = visible.filter(row => row.MedidorHistorialId === reportMeter && meterHasService(row, reportService));
   }
   const fieldsByName = new Map([...mapping].map(([field, column]) => [column.name, field]));
   const visibleKeys = new Set(visible.flatMap(Object.keys));
