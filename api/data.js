@@ -10,6 +10,38 @@ const itemsPath = (site, list) => `${listPath(site, list)}/items`;
 
 const getItems = (site, list, field) => all(`${itemsPath(site, list)}?$expand=fields($select=${enc(field)})&$top=200`);
 
+async function registrationRows(site, kind) {
+  const list = await listId(site, keys[kind]);
+  const [items, columns] = await Promise.all([all(`${itemsPath(site, list)}?$expand=fields&$top=200`), columnsFor(site, list)]);
+  return readItems(kind, items, mapColumns(kind, columns, items), new Map());
+}
+
+async function allowedBuildings(site, user) {
+  if (user.rol === 'Admin') return null;
+  const { isEnabled, localBuildingId } = await import('../lib/registro-lecturas.mjs');
+  const identity = value => String(value || '').trim().toLowerCase();
+  const accounts = new Set([identity(user.usuario), identity(user.email)].filter(Boolean));
+  const rows = await registrationRows(site, 'accesos');
+  return new Set(rows.filter(row => isEnabled(row.Activo) && accounts.has(identity(row.Correo)))
+    .map(localBuildingId).filter(Boolean));
+}
+
+async function registrationCatalog(site, user) {
+  const allowed = await allowedBuildings(site, user);
+  if (allowed?.size === 0) return { buildings: [], locals: [], meters: [] };
+  const { localBuildingId, meterLocalId } = await import('../lib/registro-lecturas.mjs');
+  const [buildings, locals, meters] = await Promise.all(['edificios', 'locales', 'medidores'].map(kind => registrationRows(site, kind)));
+  const visibleBuildings = buildings.filter(row => !allowed || allowed.has(String(row.id)));
+  const buildingIds = new Set(visibleBuildings.map(row => String(row.id)));
+  const visibleLocals = locals.filter(row => buildingIds.has(localBuildingId(row)));
+  const localIds = new Set(visibleLocals.map(row => String(row.id)));
+  return {
+    buildings: visibleBuildings.map(({ id, Title }) => ({ id, Title })),
+    locals: visibleLocals.map(row => ({ id: row.id, Title: row.Title, EdificioLookupLookupId: localBuildingId(row), MedidorAgua: row.MedidorAgua, MedidorEnergia: row.MedidorEnergia })),
+    meters: meters.filter(row => localIds.has(meterLocalId(row))).map(row => ({ id: row.id, Title: row.Title, LocalLookupLookupId: meterLocalId(row), TipoMedidor: row.TipoMedidor, UnidadMedida: row.UnidadMedida, NumeroSerie: row.NumeroSerie })),
+  };
+}
+
 function buildingLogoUrl(row, listUrl) {
   if (!row.Logo || !/^\d+$/.test(String(row.id))) return;
   let image = row.Logo;
@@ -32,7 +64,9 @@ function buildingLogoUrl(row, listUrl) {
 }
 
 module.exports=route(['GET','POST','PATCH','DELETE'],async(req,res,user)=>{
-const kind=String(req.query?.kind||'');if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
+const kind=String(req.query?.kind||'');
+if (kind === 'registro' && req.method === 'GET') return send(res, 200, await registrationCatalog(await siteId(), user));
+if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
   const listDetails = kind === 'edificios' ? g(`${listPath(site, list)}?$select=webUrl`) : null;
@@ -62,11 +96,14 @@ if (req.method === 'GET') {
     .map(column => ({ key: fieldsByName.get(column.name) || column.name, label: column.displayName }));
   return send(res, 200, { items: visible, columns: detailColumns, photosEnabled: kind === 'lecturas' && Photos.configured() });
 }
-if(user.rol!=='Admin')throw fail(403,'Solo los administradores pueden modificar datos');
+const registering = kind === 'lecturas' && req.method === 'POST';
+if(user.rol!=='Admin'&&!registering)throw fail(403,'Solo los administradores pueden modificar datos');
 const id=String(req.query?.id||'');let fields=req.body?.fields;
 if(req.method!=='DELETE'&&(!fields||typeof fields!=='object'||Array.isArray(fields)))throw fail(400,'Campos inválidos');
 if(fields&& (Object.keys(fields).length>40||JSON.stringify(fields).length>12000||Object.keys(fields).some(k=>! /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(k)||k==='id')))throw fail(400,'Campos no permitidos');
-if (kind === 'lecturas' && req.method === 'POST') {
+if (registering) {
+  const allowed = await allowedBuildings(site, user);
+  if (allowed && !allowed.has(fields.EdificioId)) throw fail(403, 'No tenés acceso para registrar lecturas en este edificio.');
   const { uploadId, bytes } = Photos.decodeReadingPhoto(req.body);
   await Photos.checkReadingAttachments();
   fields = await registrationFields(site, list, fields);

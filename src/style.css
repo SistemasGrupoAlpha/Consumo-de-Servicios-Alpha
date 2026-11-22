@@ -46,17 +46,87 @@
   margin-top: 6px;
 }
 
-.photo-input {
-  display: grid;
-  gap: 4px;
-}
-
 .reading-registration > fieldset,
+.reading-step,
 .reading-service-options {
   min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
+}
+
+.reading-step + .reading-step,
+.reading-service-options + .reading-step {
+  margin-top: 22px;
+}
+
+.reading-step legend {
+  margin-bottom: 10px;
+  font-weight: 650;
+}
+
+.reading-choices {
+  display: grid;
+  gap: 10px;
+}
+
+.reading-buildings {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 175px), 1fr));
+}
+
+.reading-locals {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 105px), 1fr));
+}
+
+.reading-choice {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  min-height: 46px;
+  padding: 12px;
+  border: 1px solid #dfe5ed;
+  border-radius: 9px;
+  background: #f4f7fa;
+  color: #17385e;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.reading-choice svg {
+  color: #2377c4;
+  flex-shrink: 0;
+}
+
+.reading-choice:hover,
+.reading-choice[aria-pressed="true"],
+.reading-choice.is-current {
+  border-color: #087ad2;
+  background: #eaf4ff;
+}
+
+.reading-choice small {
+  margin-left: auto;
+  color: #315e89;
+  flex-shrink: 0;
+}
+
+.reading-choice.is-current {
+  flex-wrap: wrap;
+  width: min(100%, 420px);
+}
+
+.reading-local-search {
+  width: min(100%, 365px);
+  min-height: 44px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid #dfe5ed;
+  border-radius: 8px;
+}
+
+.reading-more {
+  margin-top: 12px;
 }
 
 .reading-service-options {
@@ -109,4 +179,46 @@
 
 .reading-saved {
   color: #137542;
+}
+
+.form-grid > label,
+.form-grid input,
+.form-grid select {
+  min-width: 0;
+}
+
+@media (max-width: 700px) {
+  .sidebar {
+    min-height: 0;
+    height: 100dvh;
+    overflow-y: auto;
+  }
+
+  .topbar .avatar {
+    flex-shrink: 0;
+  }
+
+  .toolbar .search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .toolbar .filter,
+  .toolbar select {
+    flex: 1 1 120px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .modal-actions {
+    flex-wrap: wrap;
+  }
+
+  .reading-buildings {
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 128px), 1fr));
+  }
+
+  .reading-service {
+    flex-basis: 130px;
+  }
 }

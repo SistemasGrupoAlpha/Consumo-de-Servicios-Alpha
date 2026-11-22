@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera } from 'lucide-react';
 
 const limit = 3 * 1024 * 1024;
 const size = 1800;
@@ -65,6 +66,7 @@ export function ReadingPhotoGallery({ id, enabled, request }) {
 }
 
 export function ReadingPhotoPicker({ photos, enabled, disabled, onPick, onRemove, single = false, required = false }) {
+  const input = useRef(null);
   const pick = event => {
     const files = Array.from(event.currentTarget.files);
     event.currentTarget.value = '';
@@ -73,8 +75,8 @@ export function ReadingPhotoPicker({ photos, enabled, disabled, onPick, onRemove
   return <section className="reading-photos">
     <h3>{required ? 'Foto del medidor (obligatoria)' : 'Fotografías de la lectura'}</h3>
     {enabled ? <div className="photo-controls">
-      <label className="photo-input">Tomar foto<input type="file" accept="image/*" capture="environment" disabled={disabled} onChange={pick}/></label>
-      <label className="photo-input">{single ? 'Subir foto' : 'Agregar fotos'}<input type="file" accept="image/*" multiple={!single} disabled={disabled} onChange={pick}/></label>
+      <input ref={input} type="file" accept="image/*" multiple={!single} disabled={disabled} onChange={pick} hidden/>
+      <button type="button" className="secondary" disabled={disabled} onClick={() => input.current?.click()}><Camera size={17}/>{single && photos.length ? 'Cambiar foto' : single ? 'Adjuntar foto' : 'Adjuntar fotos'}</button>
     </div> : <p>La conexión a las fotos de SharePoint está pendiente.</p>}
     {photos.length > 0 && <div className="photo-grid">{photos.map(photo => <div key={photo.uploadId}>
       <img src={photo.preview} alt={photo.name || 'Foto por guardar'}/>
