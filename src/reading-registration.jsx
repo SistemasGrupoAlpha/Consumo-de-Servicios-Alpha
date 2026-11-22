@@ -12,6 +12,7 @@ const quantity = new Intl.NumberFormat('es-HN', { maximumFractionDigits:9 });
 
 export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings, role }) {
   const [catalogs, setCatalogs] = useState(null);
+  const [locals, setLocals] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [buildingId, setBuildingId] = useState('');
@@ -27,19 +28,24 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
   const [saved, setSaved] = useState('');
 
   useEffect(() => {
-    if (!buildingId) return;
+    if (!buildingId || !service) return;
     const controller = new AbortController();
-    request(`/api/data?kind=registro&edificio=${encodeURIComponent(buildingId)}`, { signal: controller.signal })
+    const query = new URLSearchParams({ kind: 'registro', edificio: buildingId, servicio: service });
+    const url = `/api/data?${query}`;
+    const options = { signal: controller.signal };
+    request(`${url}&view=locales`, options)
+      .then(result => { if (!controller.signal.aborted) setLocals(result.locals); })
+      .catch(() => {}); // The full response also includes the locals.
+    request(url, options)
       .then(result => { if (!controller.signal.aborted) setCatalogs(result); })
       .catch(reason => { if (!controller.signal.aborted) setLoadError(reason.message); });
     return () => controller.abort();
-  }, [request, attempt, buildingId]);
+  }, [request, attempt, buildingId, service]);
 
   const selectedBuilding = buildings?.find(building => String(building.id) === buildingId);
   const billingBuilding = catalogs?.buildings.find(building => String(building.id) === buildingId);
-  const buildingLocals = (catalogs?.locals || []).filter(local => localBuildingId(local) === buildingId);
-  const available = Object.fromEntries(Object.keys(readingServices).map(kind => [kind, buildingLocals.filter(local => localHasService(local, kind)).sort(sortByTitle)]));
-  const serviceLocals = available[service] || [];
+  const visibleLocals = catalogs?.locals ?? locals;
+  const serviceLocals = (visibleLocals || []).filter(local => localBuildingId(local) === buildingId && localHasService(local, service)).sort(sortByTitle);
   const selectedLocal = serviceLocals.find(local => String(local.id) === localId);
   const groupsByLocal = useMemo(() => {
     const meters = (catalogs?.meters || []).filter(meter => localBuildingId(meter) === buildingId && meterHasService(meter, service));
@@ -88,12 +94,17 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
     changeContext();
   }
 
+  function selectService(type) {
+    setCatalogs(null);
+    setLocals(null);
+    setLoadError('');
+    setService(type);
+    selectLocal('');
+  }
+
   function selectBuilding(id) {
     setBuildingId(id);
-    setCatalogs(null);
-    setLoadError('');
-    setService('');
-    selectLocal('');
+    selectService('');
   }
 
   async function pickPhoto([file]) {
@@ -159,17 +170,17 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
       : <form className="panel reading-registration" onSubmit={save}>
       <fieldset disabled={Boolean(working)}>
         <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding}/>
-        {buildingId && !catalogs && !loadError && <p role="status" className="reading-more">Cargando locales, medidores y lecturas del edificio…</p>}
-        {billingBuilding && <fieldset className="reading-service-options"><legend>Servicio</legend>
+        {buildingId && <fieldset className="reading-service-options"><legend>Servicio</legend>
           {Object.entries(readingServices).map(([kind, { label }]) => {
             const Icon = serviceIcons[kind];
-            const count = available[kind].length;
-            return <button type="button" className="reading-service" key={kind} aria-pressed={service === kind} disabled={!count} onClick={() => {
-              if (kind !== service) { setService(kind); selectLocal(''); }
-            }}><Icon size={22}/><span><strong>{label}</strong><small>{count ? `${count} ${count === 1 ? 'local con medidor' : 'locales con medidor'}` : 'Sin medidores en este edificio'}</small></span></button>;
+            return <button type="button" className="reading-service" key={kind} aria-pressed={service === kind} onClick={() => {
+              if (kind !== service) selectService(kind);
+            }}><Icon size={22}/><strong>{label}</strong></button>;
           })}
         </fieldset>}
-        {service && <>
+        {service && !visibleLocals && !loadError && <p role="status" className="reading-more">Cargando locales de {readingServices[service].label.toLowerCase()}…</p>}
+        {service && visibleLocals && !serviceLocals.length && <p role="status" className="reading-more">Este edificio no tiene locales habilitados para {readingServices[service].label.toLowerCase()}.</p>}
+        {service && serviceLocals.length > 0 && <>
           <div className="form-grid reading-registration-fields"><label>Mes de lectura<input type="month" required placeholder="AAAA-MM" pattern="[0-9]{4}-(0[1-9]|1[0-2])" value={month} onChange={event => { setMonth(event.target.value); changeContext(); }}/></label></div>
           <ReadingLocalCards key={JSON.stringify([buildingId, service])} locals={serviceLocals} selected={selectedLocal} onSelect={selectLocal} completed={completedLocals}/>
         </>}
@@ -182,7 +193,8 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
             }}><Gauge size={19}/><span><strong>{meter.Title}</strong>{done && <ReadingCompletion/>}</span>{meter.NumeroSerie && <small>{meter.NumeroSerie}</small>}</button>;
           })}</div>
         </fieldset>}
-        {localId && !groups.length && <p role="status">Este local no tiene un medidor con historial en el servicio seleccionado.</p>}
+        {localId && !catalogs && !loadError && <p role="status">Cargando medidores y lecturas de {readingServices[service].label.toLowerCase()}…</p>}
+        {localId && catalogs && !groups.length && <p role="status">Este local no tiene un medidor con historial en el servicio seleccionado.</p>}
         {selectedMeter && <>
           {monthly.length > 1 && <fieldset className="reading-step"><legend>Lecturas de este mes</legend><div className="reading-choices reading-buildings">
             {monthly.map(row => <button type="button" className="reading-choice" key={row.id} aria-pressed={existing?.id === row.id} onClick={() => {

@@ -6,7 +6,7 @@ import { ReadingBuildingCards, sortByTitle } from './reading-cards';
 import { BuildingAccess } from './building-access';
 import { ReadingReportDialog } from './reading-report-dialog';
 import { canReport, roleOptions, CONDO_ADMIN, SUPER_ADMIN } from '../lib/roles.mjs';
-import { billedReadingFields, historyLocations, localBuildingId, meterHasService, meterLocalId, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingSummary, registrationDirectory } from '../lib/registro-lecturas.mjs';
+import { billedReadingFields, historyLocations, localBuildingId, localHasService, meterHasService, meterLocalId, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingSummary, registrationDirectory } from '../lib/registro-lecturas.mjs';
 const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','CuotaCondonadaAgua','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
 function displayValue(field, value) {
   if (value == null || value === '') return '—';
@@ -81,11 +81,15 @@ const demoRequest = async (url, opts = {}) => {
       return { items: demoData.edificios.map(({ id, Title }) => ({ id, Title })) };
     }
     if (kind === 'registro' && method === 'GET') {
-      const meters = [...registrationDirectory(demoData.locales, demoData.medidores).scopedMeters.values()].filter(inBuilding);
+      const service = query.get('servicio');
+      const locals = demoData.locales.filter(row => inBuilding(row) && (!service || localHasService(row, service)));
+      if (query.get('view') === 'locales') return { locals };
+      const meters = [...registrationDirectory(demoData.locales, demoData.medidores).scopedMeters.values()]
+        .filter(row => inBuilding(row) && (!service || meterHasService(row, service)));
       const ids = new Set(meters.map(meter => meter.id));
       return {
         buildings: demoData.edificios.filter(row => !building || row.id === building),
-        locals: demoData.locales.filter(inBuilding),
+        locals,
         meters,
         readings: demoData.lecturas.filter(row => ids.has(readingMeterId(row))).map(row => readingSummary(row, readingMeterId(row))),
       };
