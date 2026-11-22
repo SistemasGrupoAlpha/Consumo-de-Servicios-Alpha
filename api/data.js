@@ -174,7 +174,10 @@ if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
   const listDetails = kind === 'edificios' ? g(`${listPath(site, list)}?$select=webUrl`) : null;
-  const [items, columns, details] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list), listDetails]);
+  const history = kind === 'lecturas'
+    ? Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), allowedBuildings(site, user), import('../lib/registro-lecturas.mjs')])
+    : null;
+  const [items, columns, details, locations] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list), listDetails, history]);
   const mapping = mapColumns(kind, columns, items);
   const lookups = await resolveLookups(site, mapping, items, getItems);
   const rows = readItems(kind, items, mapping, lookups);
@@ -191,9 +194,13 @@ if (req.method === 'GET') {
       }
     }
   }
-  const visible = kind === 'accesos' && user.rol !== 'Admin'
+  let visible = kind === 'accesos' && user.rol !== 'Admin'
     ? rows.filter(item => String(item.Correo || '').trim().toLowerCase() === user.usuario)
     : rows;
+  if (locations) {
+    const [buildings, directory, allowed, { historyLocations }] = locations;
+    visible = historyLocations(rows, buildings, directory, allowed);
+  }
   const fieldsByName = new Map([...mapping].map(([field, column]) => [column.name, field]));
   const visibleKeys = new Set(visible.flatMap(Object.keys));
   const detailColumns = columns.filter(column => !column.hidden && visibleKeys.has(fieldsByName.get(column.name) || column.name))

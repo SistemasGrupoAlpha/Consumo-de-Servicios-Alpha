@@ -1,12 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Building2, Droplets, Gauge, Save, Zap } from 'lucide-react';
-import { localBuildingId, localHasService, meterHasService, meterLocalId, metersWithHistory, previousReadingValue, readingCharges, readingServices } from '../lib/registro-lecturas.mjs';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Droplets, Gauge, Save, Zap } from 'lucide-react';
+import { hasMonthlyReading, localBuildingId, localHasService, meterHasService, meterLocalId, metersWithHistory, previousReadingValue, readingCharges, readingServices } from '../lib/registro-lecturas.mjs';
 import { preparePhoto, ReadingPhotoPicker } from './reading-photos';
 
-const sortByTitle = (first, second) => String(first.Title).localeCompare(String(second.Title), 'es', { numeric: true });
+import { ReadingBuildingCards, ReadingCompletion, ReadingLocalCards, sortByTitle } from './reading-cards';
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Tegucigalpa' }).format(new Date());
 const serviceIcons = { agua: Droplets, energia: Zap };
-const localPageSize = 24;
 const amount = new Intl.NumberFormat('es-HN', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const quantity = new Intl.NumberFormat('es-HN', { maximumFractionDigits:9 });
 
@@ -17,8 +16,6 @@ export function ReadingRegistration({ request, onHistory }) {
   const [buildingId, setBuildingId] = useState('');
   const [service, setService] = useState('');
   const [localId, setLocalId] = useState('');
-  const [localSearch, setLocalSearch] = useState('');
-  const [localLimit, setLocalLimit] = useState(localPageSize);
   const [groupId, setGroupId] = useState('');
   const [month, setMonth] = useState(() => today().slice(0, 7));
   const [readingId, setReadingId] = useState('');
@@ -42,10 +39,20 @@ export function ReadingRegistration({ request, onHistory }) {
   const available = Object.fromEntries(Object.keys(readingServices).map(kind => [kind, buildingLocals.filter(local => localHasService(local, kind)).sort(sortByTitle)]));
   const serviceLocals = available[service] || [];
   const selectedLocal = serviceLocals.find(local => String(local.id) === localId);
-  const filteredLocals = serviceLocals.filter(local => String(local.Title).toLocaleLowerCase('es').includes(localSearch.trim().toLocaleLowerCase('es')));
-  const meters = (catalogs?.meters || []).filter(meter => localId && meterLocalId(meter) === localId && meterHasService(meter, service)).sort(sortByTitle);
-  const groups = metersWithHistory(meters, catalogs?.readings || []);
+  const groupsByLocal = useMemo(() => {
+    const meters = (catalogs?.meters || []).filter(meter => localBuildingId(meter) === buildingId && meterHasService(meter, service));
+    const byLocal = new Map();
+    for (const group of metersWithHistory(meters, catalogs?.readings || [])) {
+      const id = meterLocalId(group.meter);
+      if (!byLocal.has(id)) byLocal.set(id, []);
+      byLocal.get(id).push(group);
+    }
+    return byLocal;
+  }, [catalogs, buildingId, service]);
+  const groups = groupsByLocal.get(localId) || [];
   const monthReady = /^\d{4}-(?:0[1-9]|1[0-2])$/.test(month);
+  const completedLocals = new Set([...groupsByLocal].filter(([, localGroups]) =>
+    localGroups.every(group => hasMonthlyReading(group, month))).map(([id]) => id));
   const selectedGroup = groups.find(group => group.key === groupId) ?? (groups.length === 1 ? groups[0] : null);
   const selectedMeter = selectedGroup?.meter;
   const monthly = selectedGroup?.readings.filter(row => row.month === month) || [];
@@ -72,8 +79,6 @@ export function ReadingRegistration({ request, onHistory }) {
   function selectLocal(id) {
     setLocalId(id);
     setGroupId('');
-    setLocalSearch('');
-    setLocalLimit(localPageSize);
     changeContext();
   }
 
@@ -142,15 +147,7 @@ export function ReadingRegistration({ request, onHistory }) {
       ? <div className="panel" role="status">No hay edificios habilitados para tu cuenta en Accesos a edificios.</div>
       : <form className="panel reading-registration" onSubmit={save}>
       <fieldset disabled={Boolean(working)}>
-        <fieldset className="reading-step"><legend>Edificio</legend>
-          {selectedBuilding ? <button type="button" className="reading-choice is-current" onClick={() => selectBuilding('')}>
-            <Building2 size={21}/><strong>{selectedBuilding.Title}</strong><small>Cambiar edificio</small>
-          </button> : <div className="reading-choices reading-buildings">
-            {buildings.map(building => <button type="button" className="reading-choice" key={building.id} onClick={() => selectBuilding(String(building.id))}>
-              <Building2 size={21}/><strong>{building.Title}</strong>
-            </button>)}
-          </div>}
-        </fieldset>
+        <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding}/>
         {buildingId && <fieldset className="reading-service-options"><legend>Servicio</legend>
           {Object.entries(readingServices).map(([kind, { label }]) => {
             const Icon = serviceIcons[kind];
@@ -160,25 +157,21 @@ export function ReadingRegistration({ request, onHistory }) {
             }}><Icon size={22}/><span><strong>{label}</strong><small>{count ? `${count} ${count === 1 ? 'local con medidor' : 'locales con medidor'}` : 'Sin medidores en este edificio'}</small></span></button>;
           })}
         </fieldset>}
-        {service && <fieldset className="reading-step"><legend>Local</legend>
-          {selectedLocal ? <button type="button" className="reading-choice is-current" onClick={() => selectLocal('')}><strong>{selectedLocal.Title}</strong><small>Cambiar local</small></button> : <>
-            {serviceLocals.length > 12 && <input type="search" className="reading-local-search" aria-label="Buscar local" placeholder="Buscar local" value={localSearch} onChange={event => {
-              setLocalSearch(event.target.value); setLocalLimit(localPageSize);
-            }}/>}
-            {filteredLocals.length ? <div className="reading-choices reading-locals">
-              {filteredLocals.slice(0, localLimit).map(local => <button type="button" className="reading-choice" key={local.id} onClick={() => selectLocal(String(local.id))}>{local.Title}</button>)}
-            </div> : <p role="status">No hay locales que coincidan con la búsqueda.</p>}
-            {filteredLocals.length > localLimit && <button type="button" className="secondary reading-more" onClick={() => setLocalLimit(current => current + localPageSize)}>Mostrar más locales</button>}
-          </>}
-        </fieldset>}
+        {service && <>
+          <div className="form-grid reading-registration-fields"><label>Mes de lectura<input type="month" required placeholder="AAAA-MM" pattern="[0-9]{4}-(0[1-9]|1[0-2])" value={month} onChange={event => { setMonth(event.target.value); changeContext(); }}/></label></div>
+          <ReadingLocalCards key={JSON.stringify([buildingId, service])} locals={serviceLocals} selected={selectedLocal} onSelect={selectLocal} completed={completedLocals}/>
+        </>}
         {localId && groups.length > 0 && <fieldset className="reading-step"><legend>Medidor</legend>
-          <div className="reading-choices reading-buildings">{groups.map(({key,meter}) => <button type="button" className="reading-choice" key={key} aria-pressed={selectedGroup?.key === key} onClick={() => {
-            if (selectedGroup?.key !== key) { setGroupId(key); changeContext(); }
-          }}><Gauge size={19}/><strong>{meter.Title}</strong>{meter.NumeroSerie && <small>{meter.NumeroSerie}</small>}</button>)}</div>
+          <div className="reading-choices reading-buildings">{groups.map(group => {
+            const { key, meter } = group;
+            const done = hasMonthlyReading(group, month);
+            return <button type="button" className={`reading-choice${done ? ' is-complete' : ''}`} key={key} aria-pressed={selectedGroup?.key === key} onClick={() => {
+              if (selectedGroup?.key !== key) { setGroupId(key); changeContext(); }
+            }}><Gauge size={19}/><span><strong>{meter.Title}</strong>{done && <ReadingCompletion/>}</span>{meter.NumeroSerie && <small>{meter.NumeroSerie}</small>}</button>;
+          })}</div>
         </fieldset>}
         {localId && !groups.length && <p role="status">Este local no tiene un medidor con historial en el servicio seleccionado.</p>}
         {selectedMeter && <>
-          <div className="form-grid reading-registration-fields"><label>Mes de lectura<input type="month" required placeholder="AAAA-MM" pattern="[0-9]{4}-(0[1-9]|1[0-2])" value={month} onChange={event => { setMonth(event.target.value); changeContext(); }}/></label></div>
           {monthly.length > 1 && <fieldset className="reading-step"><legend>Lecturas de este mes</legend><div className="reading-choices reading-buildings">
             {monthly.map(row => <button type="button" className="reading-choice" key={row.id} aria-pressed={existing?.id === row.id} onClick={() => {
               changeContext(); setReadingId(row.id);

@@ -258,3 +258,75 @@
 .reading-registration input[readonly] {
   background: #f4f7fa;
 }
+
+.reading-registration-fields + .reading-step,
+.reading-history-filters + .toolbar {
+  margin-top: 22px;
+}
+
+.reading-choice.is-complete {
+  border-color: #8ac7a2;
+  background: #e7f6ed;
+  color: #145437;
+}
+
+.reading-choice.is-complete:hover,
+.reading-choice.is-complete[aria-pressed="true"],
+.reading-choice.is-complete.is-current {
+  border-color: #19804b;
+  background: #d6f1e0;
+}
+
+.reading-completion {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #145437;
+}
+
+.reading-completion svg {
+  color: inherit;
+}
+
+.reading-history-services .reading-service {
+  flex-basis: 126px;
+}
+
+@media (max-width: 700px) {
+  .reading-history-results table,
+  .reading-history-results tbody {
+    display: block;
+    min-width: 0;
+  }
+
+  .reading-history-results thead {
+    position: absolute;
+    clip-path: inset(50%);
+  }
+
+  .reading-history-results tr {
+    display: block;
+    margin-bottom: 12px;
+    padding: 6px 12px;
+    border: 1px solid #dfe5ed;
+    border-radius: 9px;
+  }
+
+  .reading-history-results td {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .reading-history-results td[data-label]::before {
+    content: attr(data-label);
+    font-weight: 650;
+    text-align: left;
+  }
+}
