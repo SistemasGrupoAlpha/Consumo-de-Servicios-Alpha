@@ -1,4 +1,4 @@
-import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import{Building2,Store,Gauge,Users,ShieldCheck,History,LayoutDashboard,Settings,FileDown,Plus,ArrowLeft,LogOut,Search,Save,Menu,Trash2,Pencil,Eye,Activity,RefreshCw,ClipboardPenLine}from'lucide-react';import './style.css';
+import React,{useEffect,useState} from 'react';import{createRoot}from'react-dom/client';import{Building2,Store,Gauge,Users,ShieldCheck,History,LayoutDashboard,Settings,FileDown,Plus,ArrowLeft,LogOut,Search,Save,Menu,Trash2,Pencil,Eye,RefreshCw,ClipboardPenLine}from'lucide-react';import './style.css';
 import { ReadingPhotoGallery } from './reading-photos';
 import { ReadingRegistration } from './reading-registration';
 import { ReadingHistoryFilters, historyLocationId } from './reading-history';
@@ -6,7 +6,7 @@ import { ReadingBuildingCards, sortByTitle } from './reading-cards';
 import { BuildingAccess } from './building-access';
 import { ReadingReportDialog } from './reading-report-dialog';
 import { canReport, roleOptions, CONDO_ADMIN, SUPER_ADMIN } from '../lib/roles.mjs';
-import { billedReadingFields, historyLocations, localBuildingId, localHasService, meterHasService, meterLocalId, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingSummary, registrationDirectory } from '../lib/registro-lecturas.mjs';
+import { billedReadingFields, historyLocations, localBuildingId, localHasService, meterHasService, meterLocalId, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingNumber, readingSummary, registrationDirectory } from '../lib/registro-lecturas.mjs';
 const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','CuotaCondonadaAgua','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
 function displayValue(field, value) {
   if (value == null || value === '') return '—';
@@ -79,6 +79,19 @@ const demoRequest = async (url, opts = {}) => {
     const inBuilding = row => !building || localBuildingId(row) === building;
     if (kind === 'edificios' && method === 'GET' && query.get('view') === 'selector') {
       return { items: demoData.edificios.map(({ id, Title }) => ({ id, Title })) };
+    }
+    if (kind === 'edificios' && method === 'GET' && query.get('view') === 'lecturas-del-mes') {
+      const month = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Tegucigalpa' }).format(new Date()).slice(0, 7);
+      const directory = registrationDirectory(demoData.locales, demoData.medidores);
+      const counts = {};
+      for (const row of demoData.lecturas) {
+        if (readingMonth(row) !== month || readingNumber(row.LecturaFinal) === null) continue;
+        const meter = directory.meterForReading(row);
+        if (!meter) continue;
+        const building = localBuildingId(meter);
+        counts[building] = (counts[building] || 0) + 1;
+      }
+      return { month, counts };
     }
     if (kind === 'registro' && method === 'GET') {
       const service = query.get('servicio');
@@ -176,6 +189,14 @@ function App(){const[user,setUser]=useState(undefined),[login,setLogin]=useState
 const [catalogBuilding, setCatalogBuilding] = useState('');
 const [buildings, setBuildings] = useState(null);
 const [buildingsError, setBuildingsError] = useState('');
+const [readingCounts, setReadingCounts] = useState(null);
+const [countsError, setCountsError] = useState(false);
+const [countsAttempt, setCountsAttempt] = useState(0);
+const [startBuilding, setStartBuilding] = useState('');
+const reloadCounts = () => {
+  setCountsError(false);
+  setCountsAttempt(attempt => attempt + 1);
+};
 const [buildingAttempt, setBuildingAttempt] = useState(0);
 const [editorLocals, setEditorLocals] = useState(null);
 const [reportOpen, setReportOpen] = useState(false);
@@ -229,6 +250,16 @@ useEffect(() => {
 useEffect(() => {
   if (!user) return;
   const controller = new AbortController();
+  request('/api/data?kind=edificios&view=lecturas-del-mes', { signal: controller.signal }).then(result => {
+    if (!controller.signal.aborted) setReadingCounts(result.counts);
+  }, () => {
+    if (!controller.signal.aborted) setCountsError(true);
+  });
+  return () => controller.abort();
+}, [user, countsAttempt]);
+useEffect(() => {
+  if (!user) return;
+  const controller = new AbortController();
   if (modules[page] && page !== 'accesos' && (!buildingScoped || selectedBuilding)) fetchKind(page, buildingId, controller.signal);
   if (page === 'usuarios') request('/api/users', { signal: controller.signal })
     .then(result => { if (!controller.signal.aborted) setUsers(result.users || []); })
@@ -247,7 +278,9 @@ useEffect(() => {
   });
   return () => controller.abort();
 }, [editingMeter, buildingId]);
-const go = next => {
+const go = (next, entryBuilding = '') => {
+  if (next === 'registro') setStartBuilding(entryBuilding);
+  if (next === 'inicio' && page !== 'inicio') reloadCounts();
   setReportOpen(false);
   setPage(next);
   if (next !== page) {
@@ -316,6 +349,7 @@ async function save() {
         method: edit.id ? 'PATCH' : 'POST', body: JSON.stringify({ fields }),
       });
       if (page === 'edificios') reloadBuildings();
+      if (page === 'lecturas') reloadCounts();
       await fetchKind(page);
     }
     setEdit(null);
@@ -325,7 +359,7 @@ async function save() {
     setBusy(false);
   }
 }
-async function remove(x){if(!window.confirm('¿Eliminar este registro?'))return;try{await request('/api/data?kind='+page+'&id='+x.id,{method:'DELETE'});if(page==='edificios') reloadBuildings();await fetchKind(page)}catch(e){setError(e.message)}}
+async function remove(x){if(!window.confirm('¿Eliminar este registro?'))return;try{await request('/api/data?kind='+page+'&id='+x.id,{method:'DELETE'});if(page==='edificios') reloadBuildings();if(page==='lecturas') reloadCounts();await fetchKind(page)}catch(e){setError(e.message)}}
 const exportRows = page === 'usuarios' ? users : visible;
 async function exportFile(type) {
   if (!reportingAllowed) return;
@@ -358,9 +392,21 @@ async function exportFile(type) {
 if(user===undefined)return <div className="loading">Cargando plataforma…</div>;
 if(!user)return <main className="login"><div className="login-card"><div className="brand-icon">A</div><h1>Consumo de Servicios</h1><p>Grupo Alpha · Administración de consumos</p><form onSubmit={async e=>{e.preventDefault();setBusy(true);setError('');try{const r=await request('/api/login',{method:'POST',body:JSON.stringify(login)});setUser(r.user)}catch(e){setError(e.message)}finally{setBusy(false)}}}><label>Usuario o correo<input required value={login.usuario} onChange={e=>setLogin({...login,usuario:e.target.value})}/></label><label>Contraseña<input required type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})}/></label>{error&&<p className="error">{error}</p>}<button disabled={busy} className="primary">Ingresar</button>{isPages&&<button type="button" className="secondary" onClick={()=>{sessionStorage.setItem('alpha_demo','1');setUser(demoUser);setError('')}}>Entrar en modo demostración</button>}{isPages&&<small>GitHub Pages: datos de ejemplo. No conecta con SharePoint ni guarda cambios reales.</small>}</form></div></main>;
 const menu=[['inicio','Inicio',LayoutDashboard],['registro','Registro de lecturas',ClipboardPenLine],['lecturas','Historial de lecturas',History],['config','Configuraciones',Settings]];
-return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><div className="logo"><span className="brand-icon">A</span><div><b>GRUPO ALPHA</b><small>Consumo de Servicios</small></div></div><nav>{menu.filter(([k])=>(k!=='config'||admin)).map(([k,t,I])=><button key={k} className={page===k?'active':''} onClick={()=>go(k)}><I size={19}/>{t}</button>)}</nav><div className="sidebar-foot"><span>{user.nombre||user.usuario}<small>{roleOptions.find(([value])=>value===user.rol)?.[1]}</small></span><button title="Cerrar sesión" onClick={async()=>{await request('/api/logout',{method:'POST'});setUser(null);setRecords({});setBuildings(null);setBuildingsError('');setHistoryFilters({building:'',local:'',month:'',service:''});go('inicio')}}><LogOut size={18}/></button></div></aside><div className="workspace"><header className="topbar"><button className="iconbtn hamburger" aria-label="Menú de navegación" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}><Menu/></button><div className="breadcrumb">Grupo Alpha <span>/</span> {modules[page]?.title||({inicio:'Inicio',registro:'Registro de lecturas',config:'Configuraciones',usuarios:'Usuarios'}[page]||page)}</div><div className="avatar">{(user.nombre||user.usuario).slice(0,2).toUpperCase()}</div></header><main className="content">{error&&<div className="error banner">{error}<button onClick={()=>setError('')}>×</button></div>}
-{page==='inicio'&&<><div className="heading"><div><span className="eyebrow">PANEL GENERAL</span><h1>Consumo de Servicios</h1><p>Gestión centralizada de edificios, medidores y lecturas.</p></div><button className="primary" onClick={()=>go('lecturas')}><History size={17}/> Ver lecturas</button></div><div className="stats">{[['Edificios',Building2,'edificios'],['Locales',Store,'locales'],['Medidores',Gauge,'medidores'],['Lecturas',Activity,'lecturas']].filter(([, , k])=>admin||k==='lecturas').map(([t,I,k])=><button className="stat" key={k} onClick={()=>go(k)}><I size={23}/><span>{t}</span><strong>{(k==='edificios' ? buildings?.length : records[k]?.length) ?? '—'}</strong><small>Ver registros →</small></button>)}</div><div className="panel"><h2>Accesos rápidos</h2><div className="quick">{[['Historial de lecturas','lecturas',History],['Configuraciones','config',Settings]].filter(([,k])=>(k!=='config'||admin)).map(([t,k,I])=><button onClick={()=>go(k)} key={k}><I size={22}/><b>{t}</b><span>→</span></button>)}</div></div></>}
-{page==='registro'&&<ReadingRegistration role={user.rol} request={request} buildings={buildings} buildingsError={buildingsError} reloadBuildings={reloadBuildings} onHistory={()=>go('lecturas')}/>}
+return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><div className="logo"><span className="brand-icon">A</span><div><b>GRUPO ALPHA</b><small>Consumo de Servicios</small></div></div><nav>{menu.filter(([k])=>(k!=='config'||admin)).map(([k,t,I])=><button key={k} className={page===k?'active':''} onClick={()=>go(k)}><I size={19}/>{t}</button>)}</nav><div className="sidebar-foot"><span>{user.nombre||user.usuario}<small>{roleOptions.find(([value])=>value===user.rol)?.[1]}</small></span><button title="Cerrar sesión" onClick={async()=>{await request('/api/logout',{method:'POST'});setUser(null);setRecords({});setBuildings(null);setBuildingsError('');setReadingCounts(null);setCountsError(false);setHistoryFilters({building:'',local:'',month:'',service:''});go('inicio')}}><LogOut size={18}/></button></div></aside><div className="workspace"><header className="topbar"><button className="iconbtn hamburger" aria-label="Menú de navegación" aria-expanded={mobile} onClick={()=>setMobile(!mobile)}><Menu/></button><div className="breadcrumb">Grupo Alpha <span>/</span> {modules[page]?.title||({inicio:'Inicio',registro:'Registro de lecturas',config:'Configuraciones',usuarios:'Usuarios'}[page]||page)}</div><div className="avatar">{(user.nombre||user.usuario).slice(0,2).toUpperCase()}</div></header><main className="content">{error&&<div className="error banner">{error}<button onClick={()=>setError('')}>×</button></div>}
+{page==='inicio'&&<>
+  <div className="heading"><div><h1>Consumo de Servicios</h1><p>Lecturas realizadas por edificio en el mes actual.</p></div>
+    <button className="primary" onClick={()=>go('lecturas')}><History size={17}/> Ver historial</button>
+  </div>
+  <div className="panel">
+    {buildings?.length ? <ReadingBuildingCards buildings={buildings} onSelect={id=>go('registro',id)} readingCounts={readingCounts} countsError={countsError}/>
+      : <p role="status">{buildings ? 'No hay edificios habilitados para tu cuenta.' : buildingsError || 'Cargando edificios…'}</p>}
+    {buildingsError && <button className="secondary" onClick={reloadBuildings}>Reintentar edificios</button>}
+    {countsError && <button className="secondary reading-more" onClick={reloadCounts}>Reintentar conteo</button>}
+  </div>
+</>}
+{page==='registro'&&<ReadingRegistration key={startBuilding} initialBuilding={startBuilding} role={user.rol} request={request}
+  buildings={buildings} buildingsError={buildingsError} reloadBuildings={reloadBuildings} readingCounts={readingCounts} countsError={countsError}
+  onReadingChange={reloadCounts} onHistory={()=>go('lecturas')}/>}
 {page==='config'&&admin&&<><div className="heading"><div><span className="eyebrow">ADMINISTRACIÓN</span><h1>Configuraciones</h1><p>Catálogos, usuarios y permisos de acceso.</p></div></div><div className="config-grid">{[...Object.entries(modules).filter(([k])=>k!=='lecturas'&&(k!=='accesos'||admin)),['usuarios',{title:'Administradores y usuarios',icon:Users}]].map(([k,m])=><button key={k} className="config-card" onClick={()=>go(k)}><m.icon size={25}/><strong>{m.title}</strong><span>Administrar →</span></button>)}</div></>}
 {page==='accesos'&&admin&&<>
   <div className="heading"><div>

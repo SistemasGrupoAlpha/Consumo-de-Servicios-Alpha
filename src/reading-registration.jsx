@@ -10,12 +10,12 @@ const serviceIcons = { agua: Droplets, energia: Zap };
 const amount = new Intl.NumberFormat('es-HN', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const quantity = new Intl.NumberFormat('es-HN', { maximumFractionDigits:9 });
 
-export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings, role }) {
+export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings, role, initialBuilding, readingCounts, countsError, onReadingChange }) {
   const [catalogs, setCatalogs] = useState(null);
   const [locals, setLocals] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [attempt, setAttempt] = useState(0);
-  const [buildingId, setBuildingId] = useState('');
+  const [buildingId, setBuildingId] = useState(initialBuilding || '');
   const [service, setService] = useState('');
   const [localId, setLocalId] = useState('');
   const [groupId, setGroupId] = useState('');
@@ -136,6 +136,7 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
         } : row) }));
         setDraft({});
         setSaved(Object.keys(result.fields).length ? 'Valores actualizados.' : 'La lectura no tiene cambios.');
+        if (Object.keys(result.fields).length) onReadingChange();
       } else {
         const meterId = String(selectedMeter.id);
         const result = await request('/api/data?kind=lecturas', { method: 'POST', body: JSON.stringify({
@@ -147,6 +148,7 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
         }, meterId)]}));
         changeContext();
         setSaved('Lectura y foto guardadas.');
+        onReadingChange();
       }
     } catch (reason) {
       setError(reason.message);
@@ -160,7 +162,7 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
   }
 
   return <>
-    <div className="heading"><div><h1>Registro de lecturas</h1><p>Seleccioná el edificio, el servicio y el medidor que vas a leer.</p></div>
+    <div className="heading"><div><h1>Registro de lecturas</h1><p>Las tarjetas muestran las lecturas realizadas en el mes actual.</p></div>
       <button type="button" className="secondary" onClick={onHistory} disabled={Boolean(working)}>Ver historial</button>
     </div>
     {loadError && <div className="error banner" role="alert"><span>{loadError}</span><button type="button" onClick={() => { setLoadError(''); setAttempt(attempt + 1); }}>Reintentar</button></div>}
@@ -169,7 +171,7 @@ export function ReadingRegistration({ request, onHistory, buildings, buildingsEr
       ? <div className="panel" role="status">No hay edificios habilitados para tu cuenta en Accesos a edificios.</div>
       : <form className="panel reading-registration" onSubmit={save}>
       <fieldset disabled={Boolean(working)}>
-        <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding}/>
+        <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding} readingCounts={readingCounts} countsError={countsError}/>
         {buildingId && <fieldset className="reading-service-options"><legend>Servicio</legend>
           {Object.entries(readingServices).map(([kind, { label }]) => {
             const Icon = serviceIcons[kind];
