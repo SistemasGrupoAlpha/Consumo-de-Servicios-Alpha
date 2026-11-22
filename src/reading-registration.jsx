@@ -9,7 +9,7 @@ const serviceIcons = { agua: Droplets, energia: Zap };
 const amount = new Intl.NumberFormat('es-HN', { minimumFractionDigits:2, maximumFractionDigits:2 });
 const quantity = new Intl.NumberFormat('es-HN', { maximumFractionDigits:9 });
 
-export function ReadingRegistration({ request, onHistory }) {
+export function ReadingRegistration({ request, onHistory, buildings, buildingsError, reloadBuildings }) {
   const [catalogs, setCatalogs] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [attempt, setAttempt] = useState(0);
@@ -26,15 +26,16 @@ export function ReadingRegistration({ request, onHistory }) {
   const [saved, setSaved] = useState('');
 
   useEffect(() => {
+    if (!buildingId) return;
     const controller = new AbortController();
-    request('/api/data?kind=registro', { signal: controller.signal })
-      .then(setCatalogs)
+    request(`/api/data?kind=registro&edificio=${encodeURIComponent(buildingId)}`, { signal: controller.signal })
+      .then(result => { if (!controller.signal.aborted) setCatalogs(result); })
       .catch(reason => { if (!controller.signal.aborted) setLoadError(reason.message); });
     return () => controller.abort();
-  }, [request, attempt]);
+  }, [request, attempt, buildingId]);
 
-  const buildings = [...(catalogs?.buildings || [])].sort(sortByTitle);
-  const selectedBuilding = buildings.find(building => String(building.id) === buildingId);
+  const selectedBuilding = buildings?.find(building => String(building.id) === buildingId);
+  const billingBuilding = catalogs?.buildings.find(building => String(building.id) === buildingId);
   const buildingLocals = (catalogs?.locals || []).filter(local => localBuildingId(local) === buildingId);
   const available = Object.fromEntries(Object.keys(readingServices).map(kind => [kind, buildingLocals.filter(local => localHasService(local, kind)).sort(sortByTitle)]));
   const serviceLocals = available[service] || [];
@@ -63,7 +64,7 @@ export function ReadingRegistration({ request, onHistory }) {
   };
   const reading = { ...defaults, ...draft };
   const initial = previousReadingValue(selectedGroup?.readings || [], month, existing);
-  const charges = readingCharges(selectedBuilding, selectedMeter?.TipoMedidor, initial, reading.LecturaFinal);
+  const charges = readingCharges(billingBuilding, selectedMeter?.TipoMedidor, initial, reading.LecturaFinal);
   const billingError = initial === null ? 'No hay una lectura anterior con valor final para usar como inicial.'
     : charges.rate === null || charges.rate < 0 ? 'La cuota de este servicio se configura en Edificios.'
     : charges.final !== null && charges.final < initial ? 'La lectura final debe ser igual o mayor que la inicial.' : '';
@@ -84,6 +85,8 @@ export function ReadingRegistration({ request, onHistory }) {
 
   function selectBuilding(id) {
     setBuildingId(id);
+    setCatalogs(null);
+    setLoadError('');
     setService('');
     selectLocal('');
   }
@@ -143,12 +146,14 @@ export function ReadingRegistration({ request, onHistory }) {
       <button type="button" className="secondary" onClick={onHistory} disabled={Boolean(working)}>Ver historial</button>
     </div>
     {loadError && <div className="error banner" role="alert"><span>{loadError}</span><button type="button" onClick={() => { setLoadError(''); setAttempt(attempt + 1); }}>Reintentar</button></div>}
-    {!catalogs ? !loadError && <div className="panel" role="status">Cargando edificios, locales y medidores…</div> : !buildings.length
+    {buildingsError && <div className="error banner" role="alert"><span>{buildingsError}</span><button type="button" onClick={reloadBuildings}>Reintentar</button></div>}
+    {!buildings ? !buildingsError && <div className="panel" role="status">Cargando edificios…</div> : !buildings.length
       ? <div className="panel" role="status">No hay edificios habilitados para tu cuenta en Accesos a edificios.</div>
       : <form className="panel reading-registration" onSubmit={save}>
       <fieldset disabled={Boolean(working)}>
         <ReadingBuildingCards buildings={buildings} selected={selectedBuilding} onSelect={selectBuilding}/>
-        {buildingId && <fieldset className="reading-service-options"><legend>Servicio</legend>
+        {buildingId && !catalogs && !loadError && <p role="status" className="reading-more">Cargando locales, medidores y lecturas del edificio…</p>}
+        {billingBuilding && <fieldset className="reading-service-options"><legend>Servicio</legend>
           {Object.entries(readingServices).map(([kind, { label }]) => {
             const Icon = serviceIcons[kind];
             const count = available[kind].length;

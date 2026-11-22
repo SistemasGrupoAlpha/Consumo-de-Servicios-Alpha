@@ -3,16 +3,17 @@ const {columnsFor,mapColumns,resolveLookups,readItems}=require('../lib/consumo-c
 const Photos=require('../lib/sharepoint-photos');
 const {catalogItem,readingUpdates,registrationFields}=require('../lib/consumo-lecturas');
 const keys={edificios:'SP_LIST_EDIFICIOS',locales:'SP_LIST_LOCALES',medidores:'SP_LIST_MEDIDORES',lecturas:'SP_LIST_LECTURAS',accesos:'SP_LIST_ACCESOS'};
+const buildingCatalogs = new Set(['locales', 'medidores', 'accesos']);
 const enc=encodeURIComponent;
 async function all(url){let result=[];for(let i=0;url&&i<40;i++){const r=await g(url);result.push(...(r.value||[]));url=r['@odata.nextLink'];}if(url)throw fail(413,'Demasiados registros para una consulta');return result;}
 const listPath = (site, list) => `/sites/${enc(site)}/lists/${enc(list)}`;
 const itemsPath = (site, list) => `${listPath(site, list)}/items`;
 
-const getItems = (site, list, field) => all(`${itemsPath(site, list)}?$expand=fields($select=${enc(field)})&$top=200`);
+const getItems = (site, list, field) => all(`${itemsPath(site, list)}?$expand=fields($select=${enc(field)})&$top=500`);
 
 async function registrationRows(site, kind) {
   const list = await listId(site, keys[kind]);
-  const [items, columns] = await Promise.all([all(`${itemsPath(site, list)}?$expand=fields&$top=200`), columnsFor(site, list)]);
+  const [items, columns] = await Promise.all([all(`${itemsPath(site, list)}?$expand=fields&$top=500`), columnsFor(site, list)]);
   return readItems(kind, items, mapColumns(kind, columns, items), new Map());
 }
 
@@ -32,12 +33,20 @@ async function readingDirectory(site) {
   return registrationDirectory(locals, meters);
 }
 
-async function registrationCatalog(site, user) {
+async function buildingChoices(site, user) {
+  const [list, allowed] = await Promise.all([listId(site, keys.edificios), allowedBuildings(site, user)]);
+  if (allowed?.size === 0) return [];
+  const rows = await getItems(site, list, 'Title');
+  return rows.filter(row => !allowed || allowed.has(String(row.id)))
+    .map(row => ({ id: String(row.id), Title: row.fields?.Title || `Edificio #${row.id}` }));
+}
+
+async function registrationCatalog(site, user, buildingId) {
   const allowed = await allowedBuildings(site, user);
   if (allowed?.size === 0) return { buildings: [], locals: [], meters: [], readings: [] };
   const { localBuildingId, meterLocalId, readingMonth, readingSummary } = await import('../lib/registro-lecturas.mjs');
   const [buildings, directory, rows] = await Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), registrationRows(site, 'lecturas')]);
-  const visibleBuildings = buildings.filter(row => !allowed || allowed.has(String(row.id)));
+  const visibleBuildings = buildings.filter(row => (!allowed || allowed.has(String(row.id))) && (!buildingId || String(row.id) === buildingId));
   const buildingIds = new Set(visibleBuildings.map(row => String(row.id)));
   const visibleLocals = [...directory.byLocalId.values()].filter(row => buildingIds.has(localBuildingId(row)));
   const visibleMeters = [...directory.scopedMeters.values()].filter(row => buildingIds.has(localBuildingId(row)));
@@ -90,6 +99,43 @@ async function buildingUpdates(site, list, fields) {
     if (tariffFields.includes(key) || tariffFields.some(field => mapping.get(field)?.name === column.name)) {
       const number = value === '' || value == null ? null : readingNumber(value);
       if (number < 0 || (number === null && value !== '' && value != null)) throw fail(400, 'Ingresá una cuota o condonación igual o mayor que cero.');
+      updates[column.name] = number;
+    } else updates[column.name] = value;
+  }
+  return updates;
+}
+
+async function scopedCatalogUpdates(site, list, kind, fields, buildingId, creating) {
+  const columns = await columnsFor(site, list);
+  const mapping = mapColumns(kind, columns);
+  const links = mapColumns(kind, columns.filter(column => column.lookup ||
+    /^(Edificio1|EdificioLookup|LocalLookup)$/.test(column.name)));
+  const building = links.get('Edificio');
+  if (!building) throw fail(400, 'La lista no tiene una columna de vínculo con Edificios.');
+  const updates = {};
+  if (creating) {
+    await catalogItem(site, 'edificios', buildingId);
+    updates[`${building.name}LookupId`] = buildingId;
+  }
+  for (const [field, value] of Object.entries(fields)) {
+    if (field === 'Edificio') continue;
+    if (field === 'Local' && kind === 'medidores' && links.has(field)) {
+      if (value) {
+        if (typeof value !== 'string' || !/^\d+$/.test(value)) throw fail(400, 'Seleccioná un local válido.');
+        const { localBuildingId } = await import('../lib/registro-lecturas.mjs');
+        const local = await catalogItem(site, 'locales', value);
+        if (localBuildingId(local) !== buildingId) throw fail(400, 'El local debe pertenecer al edificio seleccionado.');
+      }
+      updates[`${links.get(field).name}LookupId`] = value || null;
+      continue;
+    }
+    const column = mapping.get(field);
+    if (!column || column.readOnly || column.calculated || column.lookup) continue;
+    if (column.boolean) updates[column.name] = /^(sí|si|1|true)$/i.test(value);
+    else if (column.number && typeof value === 'string') {
+      const { readingNumber } = await import('../lib/registro-lecturas.mjs');
+      const number = readingNumber(value);
+      if (number === null && value !== '') throw fail(400, `Ingresá un valor numérico en ${column.displayName}.`);
       updates[column.name] = number;
     } else updates[column.name] = value;
   }
@@ -165,7 +211,12 @@ function buildingLogoUrl(row, listUrl) {
 
 module.exports=route(['GET','POST','PATCH','DELETE'],async(req,res,user)=>{
 const kind=String(req.query?.kind||'');
-if (kind === 'registro' && req.method === 'GET') return send(res, 200, await registrationCatalog(await siteId(), user));
+const buildingId = String(req.query?.edificio || '');
+if (buildingId && !/^\d+$/.test(buildingId)) throw fail(400, 'Edificio inválido.');
+if (kind === 'edificios' && req.method === 'GET' && req.query?.view === 'selector') {
+  return send(res, 200, { items: await buildingChoices(await siteId(), user) });
+}
+if (kind === 'registro' && req.method === 'GET') return send(res, 200, await registrationCatalog(await siteId(), user, buildingId));
 if (kind === 'registro' && req.method === 'PATCH') {
   const site = await siteId();
   return patchReadingValues(site, await listId(site, keys.lecturas), req, res, user, true);
@@ -173,14 +224,27 @@ if (kind === 'registro' && req.method === 'PATCH') {
 if(!Object.hasOwn(keys,kind))throw fail(400,'Módulo desconocido');
 const site=await siteId();const list=await listId(site,keys[kind]);const base=itemsPath(site,list);
 if (req.method === 'GET') {
+  const scoped = buildingId && (buildingCatalogs.has(kind) || kind === 'lecturas');
+  const allowed = scoped ? await allowedBuildings(site, user) : null;
+  if (allowed && !allowed.has(buildingId)) throw fail(403, 'No tenés acceso a este edificio.');
   const listDetails = kind === 'edificios' ? g(`${listPath(site, list)}?$select=webUrl`) : null;
   const history = kind === 'lecturas'
-    ? Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), allowedBuildings(site, user), import('../lib/registro-lecturas.mjs')])
+    ? Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), scoped ? allowed : allowedBuildings(site, user), import('../lib/registro-lecturas.mjs')])
     : null;
-  const [items, columns, details, locations] = await Promise.all([all(`${base}?$expand=fields&$top=200`), columnsFor(site, list), listDetails, history]);
+  const [items, columns, details, locations] = await Promise.all([all(`${base}?$expand=fields&$top=500`), columnsFor(site, list), listDetails, history]);
   const mapping = mapColumns(kind, columns, items);
-  const lookups = await resolveLookups(site, mapping, items, getItems);
-  const rows = readItems(kind, items, mapping, lookups);
+  const lookupKey = mapping.get('Edificio')?.name;
+  const filteredItems = scoped && lookupKey
+    ? items.filter(item => {
+      const linked = String(item.fields?.[`${lookupKey}LookupId`] ?? '');
+      return linked === buildingId || (kind === 'lecturas' && !linked);
+    })
+    : items;
+  const lookupMapping = kind === 'lecturas' && scoped
+    ? new Map([...mapping].filter(([field]) => field !== 'Edificio' && field !== 'Local'))
+    : mapping;
+  const lookups = await resolveLookups(site, lookupMapping, filteredItems, getItems);
+  const rows = readItems(kind, filteredItems, mapping, lookups);
   if (details?.webUrl) {
     const listUrl = new URL(details.webUrl);
     for (const row of rows) {
@@ -200,6 +264,7 @@ if (req.method === 'GET') {
   if (locations) {
     const [buildings, directory, allowed, { historyLocations }] = locations;
     visible = historyLocations(rows, buildings, directory, allowed);
+    if (scoped) visible = visible.filter(row => row.EdificioHistorialId === buildingId);
   }
   const fieldsByName = new Map([...mapping].map(([field, column]) => [column.name, field]));
   const visibleKeys = new Set(visible.flatMap(Object.keys));
@@ -246,6 +311,9 @@ if (registering) {
 }
 if (kind === 'lecturas' && req.method === 'PATCH') return patchReadingValues(site, list, req, res, user, false);
 if (kind === 'edificios' && req.method !== 'DELETE') fields = await buildingUpdates(site,list,fields);
+if (buildingId && buildingCatalogs.has(kind) && req.method !== 'DELETE') {
+  fields = await scopedCatalogUpdates(site, list, kind, fields, buildingId, req.method === 'POST');
+}
 if(req.method==='POST'){const v=await g(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});return send(res,201,{id:v.id,fields:v.fields});}
 if(!/^\d+$/.test(id))throw fail(400,'ID inválido');
 if(req.method==='PATCH'){if(Object.keys(fields).length)await g(base+'/'+id+'/fields',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(fields)});return send(res,200,{ok:true});}

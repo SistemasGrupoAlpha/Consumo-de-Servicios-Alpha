@@ -334,3 +334,8 @@
     text-align: left;
   }
 }
+
+.catalog-building-picker + .toolbar,
+.catalog-building-picker + .reading-history-filters {
+  margin-top: 22px;
+}
