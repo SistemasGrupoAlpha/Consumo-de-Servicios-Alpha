@@ -1,8 +1,8 @@
 import React,{useEffect,useMemo,useState} from 'react';import{createRoot}from'react-dom/client';import{Building2,Store,Gauge,Users,ShieldCheck,History,LayoutDashboard,Settings,FileDown,Plus,ArrowLeft,LogOut,Search,Save,Menu,Trash2,Pencil,Eye,Activity,RefreshCw,ClipboardPenLine}from'lucide-react';import * as XLSX from 'xlsx';import{jsPDF}from'jspdf';import autoTable from'jspdf-autotable';import './style.css';
 import { ReadingPhotoGallery } from './reading-photos';
 import { ReadingRegistration } from './reading-registration';
-import { readingMeterId, readingMonth } from '../lib/registro-lecturas.mjs';
-const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
+import { billedReadingFields, previousReadingValue, readingCharges, readingMeterId, readingMonth, readingSummary } from '../lib/registro-lecturas.mjs';
+const modules={edificios:{title:'Edificios',icon:Building2,fields:['Title','Abreviatura','CuotaAgua','CuotaEnergia','CuotaCondonadaAgua','Activo','Logo']},locales:{title:'Locales',icon:Store,fields:['Edificio','Title','Cliente','MedidorEnergia','MedidorAgua','Metros2','DotacionAgua','Observacion']},medidores:{title:'Medidores',icon:Gauge,fields:['Title','Edificio','Local','TipoMedidor','UnidadMedida','NumeroSerie','Activo']},lecturas:{title:'Lecturas',icon:History,fields:['Title','Medidor','FechaLectura','Periodo','TipoMedidor','LecturaInicial','LecturaFinal','Consumo','CuotaAplicada','TotalPagar','Mes','Anio']},accesos:{title:'Accesos a edificios',icon:ShieldCheck,fields:['Title','Correo','Edificio','Activo']}};
 function displayValue(field, value) {
   if (value == null || value === '') return '—';
   if (typeof value === 'boolean') return value ? 'Sí' : 'No';
@@ -20,19 +20,27 @@ function BuildingLogo({ row, fullSize = false }) {
     {unavailable ? 'Abrir en SharePoint' : <img className={fullSize ? 'building-logo-detail' : undefined} src={row.LogoUrl} alt={name} loading={fullSize ? 'eager' : 'lazy'} onError={()=>setUnavailable(true)}/>}
   </a>;
 }
-const editableReadingFields = ['LecturaInicial', 'LecturaFinal'];
+const editableReadingFields = ['LecturaFinal'];
 const readingTableFields = ['Title', 'Edificio', 'Medidor', 'FechaLectura', 'Periodo', 'TipoMedidor', 'LecturaInicial'];
-const names={Title:'Nombre / Código',Abreviatura:'Abreviatura',CuotaAgua:'Cuota de agua',CuotaEnergia:'Cuota de energía',Edificio:'Edificio',Cliente:'Cliente',MedidorEnergia:'Medidor de energía',MedidorAgua:'Medidor de agua',Metros2:'Metros²',DotacionAgua:'Dotación de agua',Observacion:'Observación',TipoMedidor:'Tipo de medidor',UnidadMedida:'Unidad de medida',NumeroSerie:'Número de serie',FechaLectura:'Fecha de lectura',LecturaInicial:'Lectura inicial',LecturaFinal:'Lectura final',CuotaAplicada:'Cuota aplicada',TotalPagar:'Total a pagar',Anio:'Año',Correo:'Correo',Activo:'Activo'};
+const names={Title:'Nombre / Código',Abreviatura:'Abreviatura',CuotaAgua:'Cuota de agua',CuotaEnergia:'Cuota de energía',CuotaCondonadaAgua:'Consumo de agua condonado',Edificio:'Edificio',Cliente:'Cliente',MedidorEnergia:'Medidor de energía',MedidorAgua:'Medidor de agua',Metros2:'Metros²',DotacionAgua:'Dotación de agua',Observacion:'Observación',TipoMedidor:'Tipo de medidor',UnidadMedida:'Unidad de medida',NumeroSerie:'Número de serie',FechaLectura:'Fecha de lectura',LecturaInicial:'Lectura inicial',LecturaFinal:'Lectura final',CuotaAplicada:'Cuota aplicada',TotalPagar:'Total a pagar',Anio:'Año',Correo:'Correo',Activo:'Activo'};
 const isPages = import.meta.env.VITE_DEMO_MODE === 'true' || window.location.hostname.endsWith('.github.io');
 const demoUser={usuario:'demo',nombre:'Administrador Demo',rol:'Admin'};
 const demoData = {
-  edificios: [{id:'1',Title:'Edificio de ejemplo',Abreviatura:'DEMO',CuotaAgua:45,CuotaEnergia:5,Activo:'Sí'}, {id:'2',Title:'Edificio de ejemplo 2'}],
+  edificios: [{id:'1',Title:'Edificio de ejemplo',Abreviatura:'DEMO',CuotaAgua:45,CuotaEnergia:5,CuotaCondonadaAgua:8,Activo:'Sí'}, {id:'2',Title:'Edificio de ejemplo 2',CuotaEnergia:6.47}],
   locales: [{id:'1',Title:'Local 101',Edificio:'Edificio de ejemplo',EdificioLookupLookupId:'1',Cliente:'Cliente de prueba',MedidorAgua:'Sí',MedidorEnergia:'No'}, {id:'2',Title:'Local 201',Edificio:'Edificio de ejemplo 2',EdificioLookupLookupId:'2',MedidorAgua:'No',MedidorEnergia:'Sí'}],
   medidores: [{id:'1',Title:'AG-101',Edificio:'Edificio de ejemplo',Local:'Local 101',LocalLookupLookupId:'1',TipoMedidor:'Agua',UnidadMedida:'m³'}, {id:'2',Title:'EN-201',Edificio:'Edificio de ejemplo 2',Local:'Local 201',LocalLookupLookupId:'2',TipoMedidor:'Energía',UnidadMedida:'kWh'}],
   lecturas: [{id:'1',Title:'AG-101 - Octubre',Edificio:'Edificio de ejemplo',Medidor:'AG-101',MedidorLookupLookupId:'1',FechaLectura:'2026-10-31',TipoMedidor:'Agua',LecturaInicial:100,LecturaFinal:107,Consumo:7,CuotaAplicada:45,TotalPagar:315,Mes:'Octubre',Anio:'2026'}, {id:'2',Title:'EN-201 - Noviembre',Edificio:'Edificio de ejemplo 2',Medidor:'EN-201',MedidorLookupLookupId:'2',FechaLectura:'2026-11-10',TipoMedidor:'Energía',LecturaInicial:80,LecturaFinal:95}],
   accesos: [],
 };
 const demoPhotos = new Map();
+function demoBill(meter, building, month, final, existing) {
+  const readings = demoData.lecturas.filter(row => readingMeterId(row) === meter.id).map(row => readingSummary(row, meter.id));
+  const saved = existing && readingSummary(existing, meter.id);
+  const initial = previousReadingValue(readings, month, saved);
+  const bill = readingCharges(building, meter.TipoMedidor, initial, final);
+  if (bill.total === null) throw Error('Revisá la lectura anterior, la lectura final y la cuota.');
+  return billedReadingFields(bill);
+}
 const demoRequest = async (url, opts = {}) => {
   const method = opts.method || 'GET';
   if (url === '/api/me') return { user: sessionStorage.getItem('alpha_demo') ? demoUser : null };
@@ -51,14 +59,16 @@ const demoRequest = async (url, opts = {}) => {
     const kind = query.get('kind');
     if (kind === 'registro' && method === 'GET') return {
       buildings: demoData.edificios, locals: demoData.locales, meters: demoData.medidores,
-      readings: demoData.lecturas.map(row => ({ id: row.id, meterId: readingMeterId(row), month: readingMonth(row), date: row.FechaLectura, initial: row.LecturaInicial, final: row.LecturaFinal })),
+      readings: demoData.lecturas.map(row => readingSummary(row, readingMeterId(row))),
     };
     if (kind === 'registro' && method === 'PATCH') {
-      const { fields } = JSON.parse(opts.body);
+      const { fields, EdificioId } = JSON.parse(opts.body);
       const row = demoData.lecturas.find(reading => reading.id === id);
       if (!row) throw Error('No se encontró la lectura.');
-      Object.assign(row, fields);
-      return { id, fields };
+      if (!Object.hasOwn(fields,'LecturaFinal')) return {id,fields:{}};
+      const billed = demoBill(demoData.medidores.find(meter=>meter.id===readingMeterId(row)),demoData.edificios.find(building=>building.id===EdificioId),readingMonth(row),fields.LecturaFinal,row);
+      Object.assign(row, billed);
+      return { id, fields:billed };
     }
     const items = demoData[kind];
     if (!items) throw Error('Módulo desconocido');
@@ -72,16 +82,23 @@ const demoRequest = async (url, opts = {}) => {
         if (items.some(row => readingMeterId(row) === fields.MedidorId && readingMonth(row) === fields.FechaLectura.slice(0, 7))) {
           throw Object.assign(Error('Ya existe una lectura para el mes.'), { status: 409 });
         }
+        const billed = demoBill(meter,demoData.edificios.find(building=>building.id===fields.EdificioId),fields.FechaLectura.slice(0,7),fields.LecturaFinal);
         items.push({ id, Title: `${meter.Title} - ${fields.FechaLectura}`, Edificio: meter.Edificio, Medidor: meter.Title,
           Local: meter.Local, MedidorLookupLookupId: meter.id, TipoMedidor: meter.TipoMedidor, FechaLectura: fields.FechaLectura,
-          LecturaInicial: fields.LecturaInicial, LecturaFinal: fields.LecturaFinal });
+          ...billed });
         demoPhotos.set(id, [{ url: `data:image/jpeg;base64,${photo}` }]);
+        return {id,fields:billed};
       } else items.push({ id, ...fields });
       return { id };
     }
     if (method === 'PATCH') {
       const item = items.find(row => row.id === id);
-      if (item) Object.assign(item, JSON.parse(opts.body).fields);
+      const {fields}=JSON.parse(opts.body);
+      if (item && kind==='lecturas' && Object.hasOwn(fields,'LecturaFinal')) {
+        const meter=demoData.medidores.find(row=>row.id===readingMeterId(item));
+        const building=demoData.edificios.find(row=>row.Title===item.Edificio);
+        Object.assign(item,demoBill(meter,building,readingMonth(item),fields.LecturaFinal,item));
+      } else if (item) Object.assign(item,fields);
       return { ok: true };
     }
     if (method === 'DELETE') {
@@ -99,7 +116,7 @@ useEffect(()=>{request('/api/me').then(r=>setUser(r.user||null)).catch(()=>setUs
 useEffect(()=>{if(user&&modules[page])fetchKind(page);if(user&&page==='usuarios')request('/api/users').then(r=>setUsers(r.users||[])).catch(e=>setError(e.message))},[page,user]);
 const go=p=>{setPage(p);setEdit(null);setSelected(null);setSearch('');setError('');setMobile(false)};
 const rows=records[page]||[];
-const tableFields = page === 'lecturas' ? readingTableFields : page === 'usuarios' ? ['nombre', 'usuario', 'rol', 'activo'] : modules[page]?.fields.slice(0, 6);
+const tableFields = page === 'lecturas' ? readingTableFields : page === 'usuarios' ? ['nombre', 'usuario', 'rol', 'activo'] : page === 'edificios' ? modules.edificios.fields : modules[page]?.fields.slice(0, 6);
 const detailColumns = (listColumns[page] || []).filter(column =>
   modules[page]?.fields.includes(column.key) || column.key === 'Edificio' || column.key === 'Local' || /^field_\d+$/.test(column.key) || ['Activo', 'CantidadLocales', 'CuotaCondonadaAgua', 'LimiteAgua'].includes(column.key));
 const mappedLabels = new Set(detailColumns.filter(column => !/^field_\d+$/.test(column.key)).map(column => names[column.key] || column.label));
@@ -123,7 +140,8 @@ async function save() {
       const original = rows.find(row => row.id === edit.id);
       const fields = Object.fromEntries(Object.entries(edit).filter(([key, value]) =>
         !['id', 'LogoUrl', 'LogoItemUrl'].includes(key) && value !== undefined &&
-        (page !== 'lecturas' || (editableReadingFields.includes(key) && value !== original?.[key])),
+        (page !== 'lecturas' || (editableReadingFields.includes(key) && value !== original?.[key])) &&
+        (page !== 'edificios' || (modules.edificios.fields.includes(key) && (original ? value !== original[key] : value !== ''))),
       ));
       await request(`/api/data?kind=${page}${edit.id ? '&id=' + edit.id : ''}`, {
         method: edit.id ? 'PATCH' : 'POST', body: JSON.stringify({ fields }),
@@ -148,5 +166,5 @@ return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><
 {page==='config'&&<><div className="heading"><div><span className="eyebrow">ADMINISTRACIÓN</span><h1>Configuraciones</h1><p>Catálogos, usuarios y permisos de acceso.</p></div></div><div className="config-grid">{[...Object.entries(modules).filter(([k])=>k!=='lecturas'),['usuarios',{title:'Administradores y usuarios',icon:Users}]].map(([k,m])=><button key={k} className="config-card" onClick={()=>go(k)}><m.icon size={25}/><strong>{m.title}</strong><span>Administrar →</span></button>)}</div></>}
 {page==='reportes'&&<><div className="heading"><div><span className="eyebrow">EXPORTACIÓN</span><h1>Reportes</h1><p>Selecciona el origen y descarga los registros.</p></div></div><div className="panel"><div className="toolbar"><select value={selected||'lecturas'} onChange={e=>setSelected(e.target.value)}>{Object.entries(modules).map(([k,m])=><option value={k} key={k}>{m.title}</option>)}</select><button className="secondary" onClick={()=>go(selected||'lecturas')}>Abrir y filtrar</button></div><p>Las exportaciones Excel y PDF se generan desde cada módulo. La plantilla exacta del reporte se integrará al incorporar el modelo original.</p></div></>}
 {(modules[page]||page==='usuarios')&&<><div className="heading"><div><button className="back" onClick={()=>go(page==='lecturas'?'inicio':'config')}><ArrowLeft size={16}/> Volver</button><h1>{page==='lecturas'?'Historial de lecturas':`Administrar ${modules[page]?.title.toLowerCase()||'usuarios'}`}</h1><p>Consulta y administración de registros de SharePoint.</p></div>{page==='lecturas'&&<button className="primary" onClick={()=>go('registro')}><Plus size={17}/> Nueva lectura</button>}{admin&&page!=='lecturas'&&<button className="primary" onClick={()=>openEditor(page==='usuarios'?{usuario:'',nombre:'',rol:'Usuario',activo:true,password:''}:Object.fromEntries(modules[page].fields.map(f=>[f,''])))}><Plus size={17}/> Nuevo registro</button>}</div><div className="panel"><div className="toolbar"><div className="search"><Search size={18}/><input placeholder="Buscar registros…" value={search} onChange={e=>setSearch(e.target.value)}/></div>{page==='lecturas'&&<><select className="filter" aria-label="Filtrar por edificio" value={filters.edificio} onChange={e=>setFilters({...filters,edificio:e.target.value})}><option value="">Todos los edificios</option>{buildingNames.map(name=><option key={name} value={name}>{name}</option>)}</select>{[['tipo','Servicio'],['mes','Mes'],['anio','Año']].map(([k,t])=><input key={k} className="filter" placeholder={t} value={filters[k]} onChange={e=>setFilters({...filters,[k]:e.target.value})}/>)}</>}<button className="secondary" onClick={()=>page==='usuarios'?request('/api/users').then(r=>setUsers(r.users||[])):fetchKind(page)}><RefreshCw size={16}/></button><button className="secondary" onClick={()=>exportFile('xlsx')}><FileDown size={16}/> Excel</button><button className="secondary" onClick={()=>exportFile('pdf')}><FileDown size={16}/> PDF</button></div><div className="table-wrap"><table><thead><tr>{tableFields.map(f=><th key={f}>{names[f]||f}</th>)}<th>Acciones</th></tr></thead><tbody>{(page==='usuarios'?users:visible).map((x,i)=><tr key={x.id||x.usuario||i}>{tableFields.map(f=><td key={f}>{f==='Logo'?<BuildingLogo key={x.LogoUrl} row={x}/>:displayValue(f,x[f])}</td>)}<td><div className="actions"><button title="Ver" onClick={()=>setSelected(x)}><Eye size={17}/></button>{admin&&<button title="Editar" onClick={()=>openEditor({...x})}><Pencil size={17}/></button>}{admin&&page!=='usuarios'&&<button title="Eliminar" onClick={()=>remove(x)}><Trash2 size={17}/></button>}</div></td></tr>)}{!(page==='usuarios'?users:visible).length&&<tr><td colSpan={tableFields.length + 1} className="empty">{busy?'Cargando…':'No hay registros para mostrar. Comprueba la conexión y las listas configuradas.'}</td></tr>}</tbody></table></div><div className="table-footer">{(page==='usuarios'?users:visible).length} registros</div></div></>}
-</main></div>{selected&&typeof selected==='object'&&<div className="overlay" onClick={()=>setSelected(null)}><section className="modal" onClick={e=>e.stopPropagation()}><h2>Detalle del registro</h2><div className="details">{(visibleDetails.length ? visibleDetails : Object.keys(selected).map(key=>({key,label:names[key]||key}))).map(({key,label})=><div key={key}><b>{names[key]||label}</b>{key==='Logo'?<BuildingLogo key={selected.LogoUrl} row={selected} fullSize/>:<span>{displayValue(key,selected[key])}</span>}</div>)}</div>{page==='lecturas'&&<ReadingPhotoGallery key={selected.id} id={selected.id} enabled={photosEnabled} request={request}/>}<button className="secondary" onClick={()=>setSelected(null)}>Cerrar</button></section></div>}{edit&&<div className="overlay" onClick={closeEditor}><section className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>{edit.id?'Editar':'Crear'} {modules[page]?.title||'usuario'}</h2><button onClick={closeEditor} disabled={busy}>×</button></div>{error&&<p className="error" role="alert">{error}</p>}<div className="form-grid">{(page==='usuarios'?['usuario','nombre','rol','activo',...(!edit.id?['password']:[])]:page==='lecturas'?editableReadingFields:modules[page].fields).map(f=><label key={f}>{names[f]||f}{f==='rol'?<select value={edit[f]||'Usuario'} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Usuario</option><option>Admin</option></select>:f==='activo'||f==='Activo'?<select value={String(edit[f]??'Sí')} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Sí</option><option>No</option></select>:<input type={f==='password'?'password':f==='FechaLectura'?'date':'text'} value={f==='FechaLectura'?String(edit[f]??'').slice(0,10):String(edit[f]??'')} onChange={e=>setEdit({...edit,[f]:e.target.value})}/>}</label>)}</div><div className="modal-actions"><button className="secondary" onClick={closeEditor} disabled={busy}>Cancelar</button><button className="primary" disabled={busy} onClick={save}><Save size={16}/> Guardar</button></div></section></div>}</div>}
+</main></div>{selected&&typeof selected==='object'&&<div className="overlay" onClick={()=>setSelected(null)}><section className="modal" onClick={e=>e.stopPropagation()}><h2>Detalle del registro</h2><div className="details">{(visibleDetails.length ? visibleDetails : Object.keys(selected).map(key=>({key,label:names[key]||key}))).map(({key,label})=><div key={key}><b>{names[key]||label}</b>{key==='Logo'?<BuildingLogo key={selected.LogoUrl} row={selected} fullSize/>:<span>{displayValue(key,selected[key])}</span>}</div>)}</div>{page==='lecturas'&&<ReadingPhotoGallery key={selected.id} id={selected.id} enabled={photosEnabled} request={request}/>}<button className="secondary" onClick={()=>setSelected(null)}>Cerrar</button></section></div>}{edit&&<div className="overlay" onClick={closeEditor}><section className="modal" onClick={e=>e.stopPropagation()}><div className="modal-head"><h2>{edit.id?'Editar':'Crear'} {modules[page]?.title||'usuario'}</h2><button onClick={closeEditor} disabled={busy}>×</button></div>{error&&<p className="error" role="alert">{error}</p>}<div className="form-grid">{(page==='usuarios'?['usuario','nombre','rol','activo',...(!edit.id?['password']:[])]:page==='lecturas'?editableReadingFields:modules[page].fields).map(f=><label key={f}>{names[f]||f}{f==='rol'?<select value={edit[f]||'Usuario'} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Usuario</option><option>Admin</option></select>:f==='activo'||f==='Activo'?<select value={String(edit[f]??'Sí')} onChange={e=>setEdit({...edit,[f]:e.target.value})}><option>Sí</option><option>No</option></select>:<input type={f==='password'?'password':f==='FechaLectura'?'date':'text'} inputMode={['CuotaAgua','CuotaEnergia','CuotaCondonadaAgua','LecturaFinal'].includes(f)?'decimal':undefined} value={f==='FechaLectura'?String(edit[f]??'').slice(0,10):String(edit[f]??'')} onChange={e=>setEdit({...edit,[f]:e.target.value})}/>}</label>)}</div><div className="modal-actions"><button className="secondary" onClick={closeEditor} disabled={busy}>Cancelar</button><button className="primary" disabled={busy} onClick={save}><Save size={16}/> Guardar</button></div></section></div>}</div>}
 createRoot(document.getElementById('root')).render(<App/>);

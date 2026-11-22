@@ -233,3 +233,28 @@
     flex-basis: 130px;
   }
 }
+
+.reading-charge-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.reading-charge-summary > div {
+  padding: 12px;
+  border: 1px solid #dfe5ed;
+  border-radius: 8px;
+  background: #f4f7fa;
+}
+
+.reading-charge-summary dd {
+  margin: 6px 0 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.reading-registration input[readonly] {
+  background: #f4f7fa;
+}

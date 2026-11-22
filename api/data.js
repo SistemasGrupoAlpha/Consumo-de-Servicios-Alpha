@@ -35,7 +35,7 @@ async function readingDirectory(site) {
 async function registrationCatalog(site, user) {
   const allowed = await allowedBuildings(site, user);
   if (allowed?.size === 0) return { buildings: [], locals: [], meters: [], readings: [] };
-  const { localBuildingId, meterLocalId, readingMonth } = await import('../lib/registro-lecturas.mjs');
+  const { localBuildingId, meterLocalId, readingMonth, readingSummary } = await import('../lib/registro-lecturas.mjs');
   const [buildings, directory, rows] = await Promise.all([registrationRows(site, 'edificios'), readingDirectory(site), registrationRows(site, 'lecturas')]);
   const visibleBuildings = buildings.filter(row => !allowed || allowed.has(String(row.id)));
   const buildingIds = new Set(visibleBuildings.map(row => String(row.id)));
@@ -46,63 +46,89 @@ async function registrationCatalog(site, user) {
     const meter = directory.meterForReading(row);
     const month = readingMonth(row);
     if (!meter || !buildingIds.has(localBuildingId(meter)) || !month) continue;
-    readings.push({ id: String(row.id), meterId: String(meter.id), month, date: String(row.FechaLectura ?? '').slice(0, 10), initial: row.LecturaInicial, final: row.LecturaFinal });
+    readings.push(readingSummary(row, meter.id));
   }
   return {
-    buildings: visibleBuildings.map(({ id, Title }) => ({ id, Title })),
+    buildings: visibleBuildings.map(({ id, Title, CuotaAgua, CuotaEnergia, CuotaCondonadaAgua }) => ({ id, Title, CuotaAgua, CuotaEnergia, CuotaCondonadaAgua })),
     locals: visibleLocals.map(row => ({ id: row.id, Title: row.Title, EdificioLookupLookupId: localBuildingId(row), MedidorAgua: row.MedidorAgua, MedidorEnergia: row.MedidorEnergia })),
     meters: visibleMeters.map(row => ({ id: row.id, Title: row.Title, EdificioLookupLookupId: localBuildingId(row), LocalLookupLookupId: meterLocalId(row), TipoMedidor: row.TipoMedidor, UnidadMedida: row.UnidadMedida, NumeroSerie: row.NumeroSerie })),
     readings,
   };
 }
 
-function checkNewReadingMonth(fields, meter, directory, history, {meterGroupKey,readingMonth}) {
-  const months = new Set();
-  let hasHistory = false;
+function readingsForMeter(meter, directory, history, {meterGroupKey,readingSummary}) {
+  const readings = [];
   const group = meterGroupKey(meter);
   for (const row of history) {
     const linked = directory.meterForReading(row);
-    const month = readingMonth(row);
-    if (!linked || !month || meterGroupKey(linked) !== group) continue;
-    months.add(month);
-    if (String(linked.id) === fields.MedidorId) hasHistory = true;
+    if (!linked || meterGroupKey(linked) !== group) continue;
+    const reading = readingSummary(row, linked.id);
+    if (reading.month) readings.push(reading);
   }
-  if (!hasHistory) {
-    throw fail(400, 'Seleccioná un medidor con historial en este edificio.');
+  return readings;
+}
+
+function billReading(building, meter, readings, month, final, existing, helpers) {
+  const initial = helpers.previousReadingValue(readings, month, existing);
+  const charges = helpers.readingCharges(building, meter.TipoMedidor, initial, final);
+  if (initial === null) throw fail(400, 'No hay una lectura anterior con valor final para este medidor.');
+  if (charges.final === null || charges.final < initial) throw fail(400, 'La lectura final debe ser igual o mayor que la lectura inicial.');
+  if (charges.total === null) throw fail(400, 'Configurá una cuota válida para este servicio en Edificios.');
+  return helpers.billedReadingFields(charges);
+}
+
+const tariffFields = ['CuotaAgua', 'CuotaEnergia', 'CuotaCondonadaAgua'];
+
+async function buildingUpdates(site, list, fields) {
+  const {readingNumber} = await import('../lib/registro-lecturas.mjs');
+  const columns = await columnsFor(site, list);
+  const mapping = mapColumns('edificios', columns);
+  const updates = {};
+  for (const [key, value] of Object.entries(fields)) {
+    const column = mapping.get(key) ?? columns.find(column => column.name === key);
+    if (!column || column.readOnly || column.calculated) continue;
+    if (tariffFields.includes(key) || tariffFields.some(field => mapping.get(field)?.name === column.name)) {
+      const number = value === '' || value == null ? null : readingNumber(value);
+      if (number < 0 || (number === null && value !== '' && value != null)) throw fail(400, 'Ingresá una cuota o condonación igual o mayor que cero.');
+      updates[column.name] = number;
+    } else updates[column.name] = value;
   }
-  if (months.has(fields.FechaLectura.slice(0, 7))) {
-    throw fail(409, 'Ya hay una lectura asociada a este medidor para el mes. Revisá el registro existente.');
-  }
+  return updates;
 }
 
 async function patchReadingValues(site, list, req, res, user, fromRegistration) {
   const id = String(req.query?.id || '');
   const { fields, EdificioId, MedidorId, Periodo } = req.body || {};
-  const editable = ['LecturaInicial', 'LecturaFinal'];
+  const editable = ['LecturaFinal'];
   if (!/^\d+$/.test(id) || !fields || typeof fields !== 'object' || Array.isArray(fields) || Object.keys(fields).some(key => !editable.includes(key))) {
-    throw fail(400, 'Solo se pueden editar los valores de la lectura seleccionada.');
+    throw fail(400, 'Solo se puede editar la lectura final.');
   }
   if (fromRegistration) {
     if (![EdificioId, MedidorId].every(value => typeof value === 'string' && /^\d+$/.test(value))) throw fail(400, 'Seleccioná un edificio y un medidor válidos.');
     const allowed = await allowedBuildings(site, user);
     if (allowed && !allowed.has(EdificioId)) throw fail(403, 'No tenés acceso para editar lecturas en este edificio.');
   }
-  const { localBuildingId, meterLocalId, readingMonth } = await import('../lib/registro-lecturas.mjs');
-  const [current, directory] = await Promise.all([catalogItem(site, 'lecturas', id), fromRegistration ? readingDirectory(site) : null]);
+  const helpers = await import('../lib/registro-lecturas.mjs');
+  const {localBuildingId, meterLocalId, readingMonth, readingNumber, readingSummary} = helpers;
+  if (!Object.hasOwn(fields, 'LecturaFinal') && !fromRegistration) return send(res,200,{id,fields:{}});
+  const [current, directory] = await Promise.all([catalogItem(site, 'lecturas', id), readingDirectory(site)]);
+  const meter = directory.meterForReading(current);
+  const month = readingMonth(current);
   if (fromRegistration) {
-    const meter = directory.meterForReading(current);
-    if (!meter || String(meter.id) !== MedidorId || !readingMonth(current) || readingMonth(current) !== Periodo ||
+    if (!meter || String(meter.id) !== MedidorId || !month || month !== Periodo ||
         localBuildingId(meter) !== EdificioId || (req.body.LocalId && meterLocalId(meter) !== req.body.LocalId)) {
       throw fail(409, 'La lectura seleccionada ya no corresponde al medidor y mes elegidos.');
     }
   }
-  const changed = {};
-  for (const [key, value] of Object.entries(fields)) {
-    const text = String(value ?? '').trim();
-    const number = Number(text.replace(',', '.'));
-    if (!text || !Number.isFinite(number)) throw fail(400, 'Ingresá un valor numérico para la lectura.');
-    if (current[key] == null || Number(current[key]) !== number) changed[key] = number;
-  }
+  if (!Object.hasOwn(fields, 'LecturaFinal')) return send(res,200,{id,fields:{}});
+  const final = readingNumber(fields.LecturaFinal);
+  if (final === null) throw fail(400, 'Ingresá un valor numérico para la lectura final.');
+  if (final === readingNumber(current.LecturaFinal)) return send(res,200,{id,fields:{}});
+  if (!meter || !month) throw fail(409, 'La lectura no tiene un medidor y mes válidos para calcular el consumo.');
+  const [building, history] = await Promise.all([catalogItem(site,'edificios',localBuildingId(meter)),registrationRows(site,'lecturas')]);
+  const readings = readingsForMeter(meter,directory,history,helpers);
+  const billed = billReading(building,meter,readings,month,final,readingSummary(current,meter.id),helpers);
+  const changed = Object.fromEntries(Object.entries(billed).filter(([key,value]) => readingNumber(current[key]) !== value));
   if (Object.keys(changed).length) {
     const updates = await readingUpdates(site, list, changed);
     if (Object.keys(updates).length !== Object.keys(changed).length) throw fail(500, 'No se encontraron las columnas de valores de lectura.');
@@ -183,10 +209,20 @@ if (registering) {
   const allowed = await allowedBuildings(site, user);
   if (allowed && !allowed.has(fields.EdificioId)) throw fail(403, 'No tenés acceso para registrar lecturas en este edificio.');
   const { uploadId, bytes } = Photos.decodeReadingPhoto(req.body);
+  if (Object.keys(fields).some(key=>!['EdificioId','LocalId','MedidorId','Servicio','FechaLectura','LecturaFinal'].includes(key))) throw fail(400,'La cuota, la lectura inicial y los totales se calculan automáticamente.');
+  if (typeof fields.EdificioId !== 'string' || !/^\d+$/.test(fields.EdificioId) || typeof fields.FechaLectura !== 'string') throw fail(400,'Seleccioná un edificio y una fecha válidos.');
   const [directory, history, helpers] = await Promise.all([readingDirectory(site), registrationRows(site, 'lecturas'), import('../lib/registro-lecturas.mjs')]);
   const meter = directory.scopedMeters.get(fields.MedidorId);
-  const updates = await registrationFields(site, list, fields, { local: directory.byLocalId.get(fields.LocalId), meter });
-  checkNewReadingMonth(fields, meter, directory, history, helpers);
+  const local = directory.byLocalId.get(fields.LocalId);
+  if (!meter || helpers.localBuildingId(meter) !== fields.EdificioId) throw fail(400,'El medidor no corresponde al edificio seleccionado.');
+  const readings = readingsForMeter(meter,directory,history,helpers);
+  const month = fields.FechaLectura.slice(0,7);
+  if (readings.some(row=>row.month===month)) throw fail(409,'Ya hay una lectura asociada a este medidor para el mes. Revisá el registro existente.');
+  const building = await catalogItem(site,'edificios',fields.EdificioId);
+  const billed = billReading(building,meter,readings,month,fields.LecturaFinal,null,helpers);
+  const updates = await registrationFields(site,list,fields,{local,meter},billed);
+  const billingColumns = mapColumns('lecturas',await columnsFor(site,list));
+  if (Object.keys(billed).some(key=>!Object.hasOwn(updates,billingColumns.get(key)?.name))) throw fail(500,'No se encontraron todas las columnas de facturación para guardar la lectura.');
   await Photos.checkReadingAttachments();
   const created = await g(base, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields:updates})});
   try {
@@ -199,9 +235,10 @@ if (registering) {
     }
     throw error;
   }
-  return send(res, 201, {id:created.id});
+  return send(res, 201, {id:created.id, fields:billed});
 }
 if (kind === 'lecturas' && req.method === 'PATCH') return patchReadingValues(site, list, req, res, user, false);
+if (kind === 'edificios' && req.method !== 'DELETE') fields = await buildingUpdates(site,list,fields);
 if(req.method==='POST'){const v=await g(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fields})});return send(res,201,{id:v.id,fields:v.fields});}
 if(!/^\d+$/.test(id))throw fail(400,'ID inválido');
 if(req.method==='PATCH'){if(Object.keys(fields).length)await g(base+'/'+id+'/fields',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(fields)});return send(res,200,{ok:true});}
